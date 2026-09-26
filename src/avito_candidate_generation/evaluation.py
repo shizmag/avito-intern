@@ -34,9 +34,10 @@ def recall_at_k(predictions: pd.DataFrame, ground_truth: pd.DataFrame, k: int) -
     for query_id in query_ids:
         got_values = ranked.loc[ranked["internal_query_id"] == query_id, "item_id"].head(k).astype(str).tolist()
         got = set(got_values)
-        values.append(
-            float(len(got & relevant[query_id])) / float(len(relevant[query_id]))
-        )
+        try:
+            values.append(float(len(got & relevant[query_id])) / float(len(relevant[query_id])))
+        except (KeyError, ZeroDivisionError, TypeError) as exc:
+            raise CandidateError("invalid ground-truth relevance") from exc
     return float(sum(values) / len(values)) if values else 0.0
 
 
@@ -48,13 +49,14 @@ def evaluate_candidates(
     slices: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     metrics = {f"recall@{k}": recall_at_k(predictions, ground_truth, k) for k in ks}
+    try:
+        query_count = len(set(ground_truth["internal_query_id"].astype(str).tolist()))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CandidateError("invalid ground-truth query IDs") from exc
     return {
         "schema_version": 1,
         "metrics": metrics,
-        "counts": {
-            "queries": int(ground_truth["internal_query_id"].nunique()),  # pyright: ignore[reportArgumentType]
-            "prediction_rows": int(len(predictions)),
-        },
+        "counts": {"queries": query_count, "prediction_rows": len(predictions)},
         "slices": slices or {},
         "status": "PASS",
     }

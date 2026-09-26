@@ -10,12 +10,12 @@ import pandas as pd
 
 
 def describe_table(frame: pd.DataFrame) -> dict[str, Any]:
-    return {
-        "rows": int(len(frame)),
-        "columns": [str(c) for c in frame.columns],
-        "nulls": {str(k): int(v) for k, v in frame.isna().sum().items()},
-        "duplicates": int(frame.duplicated().sum()),
-    }
+    try:
+        nulls = {str(k): int(v) for k, v in frame.isna().sum().items()}
+        duplicates = int(frame.duplicated().sum())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("unable to describe table") from exc
+    return {"rows": int(len(frame)), "columns": [str(c) for c in frame.columns], "nulls": nulls, "duplicates": duplicates}
 
 
 def write_eda_report(tables: dict[str, pd.DataFrame], output: str | Path) -> Path:

@@ -84,7 +84,10 @@ class BM25Index:
                 (qid, item_id, source, float(score), rank)
                 for rank, (score, item_id) in enumerate(order, 1)
             )
-        return pd.DataFrame(rows, columns=["internal_query_id", "item_id", "source", "score", "rank"])
+        try:
+            return pd.DataFrame(rows, columns=["internal_query_id", "item_id", "source", "score", "rank"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("unable to build BM25 candidates") from exc
 
     def save(self, path: str | Path) -> None:
         target = Path(path)
@@ -94,12 +97,18 @@ class BM25Index:
 
     @staticmethod
     def load(path: str | Path) -> "BM25Index":
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid BM25 index artifact") from exc
         item_ids = payload.get("item_ids")
         documents = payload.get("documents")
         if not isinstance(item_ids, list) or not isinstance(documents, list) or len(item_ids) != len(documents):
             raise ValueError("invalid BM25 index")
-        return BM25Index([str(item_id) for item_id in item_ids], [tuple(str(token) for token in document) for document in documents], float(payload.get("k1", 1.5)), float(payload.get("b", 0.75)))
+        try:
+            return BM25Index([str(item_id) for item_id in item_ids], [tuple(str(token) for token in document) for document in documents], float(payload.get("k1", 1.5)), float(payload.get("b", 0.75)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid BM25 index values") from exc
 
 
 def retrieve_bm25(

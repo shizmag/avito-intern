@@ -53,7 +53,10 @@ def validate_candidates(
     except (KeyError, TypeError) as exc:
         raise CandidateError("invalid candidate grouping columns") from exc
     for _, group in groups:
-        ranks = sorted(int(x) for x in group["rank"])
+        try:
+            ranks = sorted(int(x) for x in group["rank"])
+        except (TypeError, ValueError, KeyError) as exc:
+            raise CandidateError("rank values must be integers") from exc
         if ranks != list(range(1, len(ranks) + 1)):
             raise CandidateError("rank must be contiguous per query/source")
 
