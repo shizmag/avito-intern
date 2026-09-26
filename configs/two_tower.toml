@@ -1,0 +1,9 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[two_tower]
+dimension = 32
+batch_size = 32
+epochs = 1
+temperature = 0.07
