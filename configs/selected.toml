@@ -1,0 +1,7 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[selection]
+source = "rrf"
+metric = "recall@50"

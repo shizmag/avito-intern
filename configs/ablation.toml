@@ -1,0 +1,7 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[ablation]
+metric = "recall@50"
+comparable_group = "default"

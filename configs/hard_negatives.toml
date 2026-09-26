@@ -1,0 +1,7 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[hard_negatives]
+max_per_query = 20
+iteration = 1

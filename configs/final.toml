@@ -1,0 +1,7 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[final]
+bundle_root = "artifacts/final"
+max_candidates = 50
