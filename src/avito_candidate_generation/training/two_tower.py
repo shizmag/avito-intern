@@ -1,4 +1,4 @@
-"""Contrastive two-tower training helpers with optional torch integration."""
+"""Deterministic two-tower baseline and hard-negative dataset helpers."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,7 +8,10 @@ import numpy as np
 
 def positive_mask(query_ids: Sequence[str], item_ids: Sequence[str], known_pairs: set[tuple[str, str]] | None = None) -> np.ndarray:
     pairs = known_pairs or set(zip(query_ids, item_ids))
-    return np.asarray([[((q, i) in pairs) for i in item_ids] for q in query_ids], dtype=bool)
+    try:
+        return np.asarray([[(q, i) in pairs for i in item_ids] for q in query_ids], dtype=bool)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid query/item IDs") from exc
 
 
 def contrastive_loss(scores: np.ndarray, positive: np.ndarray | None = None, temperature: float = 0.07) -> float:
@@ -34,3 +37,12 @@ def deterministic_batches(size: int, batch_size: int, seed: int = 42) -> list[np
         raise ValueError("invalid size or batch_size")
     order = np.random.default_rng(seed).permutation(size)
     return [order[start:start + batch_size] for start in range(0, size, batch_size)]
+
+
+def prepare_hard_training_rows(positives, negatives):
+    required = {"internal_query_id", "item_id"}
+    if not required.issubset(positives.columns) or not required.issubset(negatives.columns):
+        raise ValueError("positive and negative IDs required")
+    if negatives.duplicated(["internal_query_id", "item_id"]).any():
+        raise ValueError("duplicate hard negative")
+    return negatives.merge(positives[["internal_query_id", "item_id"]].assign(label=1), on=["internal_query_id", "item_id"], how="left", indicator=True)

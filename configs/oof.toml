@@ -1,0 +1,6 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[oof]
+folds = 3

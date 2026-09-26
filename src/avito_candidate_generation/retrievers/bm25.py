@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import pickle
+import json
+from pathlib import Path
 from typing import Sequence
 
 import pandas as pd
@@ -85,14 +86,20 @@ class BM25Index:
             )
         return pd.DataFrame(rows, columns=["internal_query_id", "item_id", "source", "score", "rank"])
 
-    def save(self, path: str) -> None:
-        with open(path, "wb") as fh:
-            pickle.dump(self, fh)
+    def save(self, path: str | Path) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"item_ids": self.item_ids, "documents": [list(document) for document in self.documents], "k1": self.k1, "b": self.b}
+        target.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
 
     @staticmethod
-    def load(path: str) -> "BM25Index":
-        with open(path, "rb") as fh:
-            return pickle.load(fh)
+    def load(path: str | Path) -> "BM25Index":
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        item_ids = payload.get("item_ids")
+        documents = payload.get("documents")
+        if not isinstance(item_ids, list) or not isinstance(documents, list) or len(item_ids) != len(documents):
+            raise ValueError("invalid BM25 index")
+        return BM25Index([str(item_id) for item_id in item_ids], [tuple(str(token) for token in document) for document in documents], float(payload.get("k1", 1.5)), float(payload.get("b", 0.75)))
 
 
 def retrieve_bm25(

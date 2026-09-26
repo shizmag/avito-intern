@@ -72,12 +72,11 @@ def validate_negatives(
         raise ValueError("per-query negative limit exceeded")
     if "source" not in negatives.columns and "sources" not in negatives.columns:
         raise ValueError("missing negative provenance")
-    return {
-        "rows": int(len(negatives)),
-        "queries": len(set(negatives["internal_query_id"].astype(str).tolist())),
-        "collisions": 0,
-        "status": True,
-    }
+    try:
+        query_count = len(set(negatives["internal_query_id"].astype(str).tolist()))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("invalid negative query IDs") from exc
+    return {"rows": int(len(negatives)), "queries": query_count, "collisions": 0, "status": True}
 
 
 def main() -> None:

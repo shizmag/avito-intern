@@ -1,0 +1,7 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[catboost]
+iterations = 100
+top_k = 50

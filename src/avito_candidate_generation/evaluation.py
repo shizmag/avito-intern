@@ -27,9 +27,10 @@ def recall_at_k(predictions: pd.DataFrame, ground_truth: pd.DataFrame, k: int) -
         q: set(g["item_id"]) for q, g in ground_truth.groupby("internal_query_id")
     }
     values: list[float] = []
-    ranked = predictions.sort_values(
-        ["internal_query_id", "rank", "item_id"], kind="mergesort"
-    ).drop_duplicates(["internal_query_id", "item_id"])  # pyright: ignore[reportCallIssue]
+    try:
+        ranked = predictions.sort_values(["internal_query_id", "rank", "item_id"], kind="mergesort").drop_duplicates(["internal_query_id", "item_id"])  # pyright: ignore[reportCallIssue]
+    except (KeyError, TypeError) as exc:
+        raise CandidateError("invalid prediction ordering columns") from exc
     for query_id in query_ids:
         got_values = ranked.loc[ranked["internal_query_id"] == query_id, "item_id"].head(k).astype(str).tolist()
         got = set(got_values)

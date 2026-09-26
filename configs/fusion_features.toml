@@ -1,0 +1,7 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[fusion]
+rrf_k = 60
+limit = 500

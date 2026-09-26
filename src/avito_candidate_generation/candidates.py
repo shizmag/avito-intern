@@ -48,7 +48,11 @@ def validate_candidates(
         known_item_ids
     ):
         raise CandidateError("unknown item ID")
-    for _, group in frame.groupby(["internal_query_id", "source"], sort=False):
+    try:
+        groups = frame.groupby(["internal_query_id", "source"], sort=False)
+    except (KeyError, TypeError) as exc:
+        raise CandidateError("invalid candidate grouping columns") from exc
+    for _, group in groups:
         ranks = sorted(int(x) for x in group["rank"])
         if ranks != list(range(1, len(ranks) + 1)):
             raise CandidateError("rank must be contiguous per query/source")
