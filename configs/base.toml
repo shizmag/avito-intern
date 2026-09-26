@@ -1,0 +1,18 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[data]
+train = "data/train.parquet"
+benchmark_queries = "data/benchmark_queries.parquet"
+benchmark_items = "data/benchmark_items.parquet"
+
+[artifacts]
+root = "artifacts"
+
+[logging]
+level = "INFO"
+
+[resources]
+max_workers = 1
+max_memory_gb = 16

@@ -1,0 +1,12 @@
+task.md
+data/*
+.pi/
+.venv/
+__marimo__/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+artifacts/
+reports/generated/
+answer.csv

@@ -1,0 +1,18 @@
+[project]
+name = "avito-test"
+version = "0.1.0"
+description = "Reproducible Avito candidate-generation pipeline"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "marimo>=0.25.0",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "pyarrow>=25.0.1",
+    "scikit-learn>=1.9.1",
+    "seaborn>=0.13.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
