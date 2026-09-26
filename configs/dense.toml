@@ -1,0 +1,11 @@
+[project]
+repo_root = ".."
+seed = 42
+
+[dense]
+model = "local/fake-or-configured"
+revision = "unknown"
+batch_size = 32
+normalize = true
+k = 500
+trust_remote_code = false

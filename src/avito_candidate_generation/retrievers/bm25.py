@@ -83,9 +83,7 @@ class BM25Index:
                 (qid, item_id, source, float(score), rank)
                 for rank, (score, item_id) in enumerate(order, 1)
             )
-        return pd.DataFrame(
-            rows, columns=["internal_query_id", "item_id", "source", "score", "rank"]
-        )
+        return pd.DataFrame(rows, columns=["internal_query_id", "item_id", "source", "score", "rank"])
 
     def save(self, path: str) -> None:
         with open(path, "wb") as fh:
