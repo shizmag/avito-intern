@@ -80,10 +80,10 @@ class BM25Index:
                 ),
                 key=lambda pair: (-pair[0], pair[1]),
             )[:k]
-            rows.extend(
-                (qid, item_id, source, float(score), rank)
-                for rank, (score, item_id) in enumerate(order, 1)
-            )
+            try:
+                rows.extend((qid, item_id, source, float(score), rank) for rank, (score, item_id) in enumerate(order, 1))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid BM25 score") from exc
         try:
             return pd.DataFrame(rows, columns=["internal_query_id", "item_id", "source", "score", "rank"])
         except (TypeError, ValueError) as exc:

@@ -77,10 +77,13 @@ def validate_string_ids(values: Iterable[object], name: str) -> None:
 
 
 def validate_unique(frame: pd.DataFrame, columns: list[str]) -> None:
-    if bool(frame.duplicated(columns, keep=False).any()):
-        raise SchemaError(
-            f"duplicate key {columns}: {int(frame.duplicated(columns, keep=False).sum())} rows"
-        )
+    try:
+        duplicate_mask = frame.duplicated(columns, keep=False)
+        duplicate_count = int(duplicate_mask.sum())
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SchemaError(f"unable to validate key {columns}") from exc
+    if bool(duplicate_mask.any()):
+        raise SchemaError(f"duplicate key {columns}: {duplicate_count} rows")
 
 
 def validate_domains(
@@ -89,10 +92,12 @@ def validate_domains(
     diagnostics: dict[str, int] = {}
     for column in numeric_columns:
         if column in frame:
-            values = pd.to_numeric(frame[column], errors="coerce")
-            diagnostics[f"{column}_invalid"] = int(
-                ((frame[column].notna()) & pd.isna(values)).sum()
-            )  # pyright: ignore[reportArgumentType]
+            try:
+                values = pd.to_numeric(frame[column], errors="coerce")
+                invalid = ((frame[column].notna()) & pd.isna(values)).sum()
+                diagnostics[f"{column}_invalid"] = int(invalid)
+            except (TypeError, ValueError) as exc:
+                raise SchemaError(f"unable to validate numeric column {column}") from exc
     if "search_is_delivery_search" in frame:
         bad = (
             ~frame["search_is_delivery_search"].isin([0, 1])
