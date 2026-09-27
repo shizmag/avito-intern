@@ -6,14 +6,71 @@ import csv
 import json
 import os
 from collections.abc import Callable, Sequence
+
+import numpy as np
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from .retrievers.exact_search import exact_top_k
 
 from .config import load_config
 from .retrievers.bm25 import BM25Index
 from .workflow import _compose_item_text, _compose_query_text, _prepare_workflow_paths
+
+
+def stream_exact_recall_at_k(
+    queries: pd.DataFrame,
+    ground_truth: pd.DataFrame,
+    encode: Callable[[Sequence[str]], np.ndarray],
+    item_embeddings: np.ndarray,
+    item_ids: Sequence[str],
+    *,
+    ks: Sequence[int] = (10, 20, 50, 100, 200, 500),
+    query_batch_size: int = 32,
+    item_batch_size: int = 2048,
+    source: str = "dense",
+) -> dict[str, float]:
+    """Evaluate exact dense retrieval without retaining all query candidates."""
+    if not ks or min(ks) < 1 or query_batch_size < 1 or item_batch_size < 1:
+        raise ValueError("ks and batch sizes must be positive")
+    if ground_truth.duplicated(["internal_query_id", "item_id"]).any():
+        raise ValueError("duplicate ground-truth pair")
+    relevant = {
+        str(query_id): set(group["item_id"].astype(str))
+        for query_id, group in ground_truth.groupby("internal_query_id")
+    }
+    query_ids = queries["internal_query_id"].astype(str).tolist()
+    if set(relevant).difference(query_ids):
+        raise ValueError("ground truth references query absent from validation queries")
+    sums = dict.fromkeys(ks, 0.0)
+    max_k = max(ks)
+    for start in range(0, len(queries), query_batch_size):
+        batch = queries.iloc[start : start + query_batch_size]
+        vectors = np.asarray(
+            encode(batch["text"].astype(str).tolist()), dtype=np.float32
+        )
+        candidates = exact_top_k(
+            vectors,
+            item_embeddings,
+            list(item_ids),
+            k=max_k,
+            query_ids=batch["internal_query_id"].astype(str).tolist(),
+            source=source,
+            batch_size=query_batch_size,
+            item_batch_size=item_batch_size,
+        )
+        for query_id, group in candidates.groupby("internal_query_id"):
+            items = (
+                group.sort_values(["rank", "item_id"], kind="mergesort")["item_id"]
+                .astype(str)
+                .tolist()
+            )
+            expected = relevant[str(query_id)]
+            for k in ks:
+                sums[k] += len(set(items[:k]) & expected) / len(expected)
+    denominator = len(relevant)
+    return {f"recall@{k}": sums[k] / denominator for k in ks}
 
 
 def stream_recall_at_k(

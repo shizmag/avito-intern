@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from avito_candidate_generation.validation import stream_exact_recall_at_k
 
 from avito_candidate_generation.retrievers.dense import (
     build_embedding_artifact,
@@ -54,3 +55,27 @@ def test_chunked_exact_top_k_matches_full_matrix_with_stable_ties() -> None:
     assert actual["item_id"].tolist() == expected["item_id"].tolist()
     assert actual["rank"].tolist() == expected["rank"].tolist()
     np.testing.assert_allclose(actual["score"], expected["score"], rtol=0.0, atol=1e-7)
+
+
+def test_stream_exact_recall_uses_chunked_search() -> None:
+    queries = pd.DataFrame({"internal_query_id": ["q0", "q1"], "text": ["a", "b"]})
+    ground_truth = pd.DataFrame(
+        {"internal_query_id": ["q0", "q1"], "item_id": ["a", "b"]}
+    )
+    items = np.asarray([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
+    ids = ["a", "b", "c"]
+    vectors = {
+        "a": np.asarray([[1.0, 0.0]], dtype=np.float32),
+        "b": np.asarray([[0.0, 1.0]], dtype=np.float32),
+    }
+    result = stream_exact_recall_at_k(
+        queries,
+        ground_truth,
+        lambda texts: np.vstack([vectors[x] for x in texts]),
+        items,
+        ids,
+        ks=(1, 2),
+        query_batch_size=1,
+        item_batch_size=2,
+    )
+    assert result == {"recall@1": 1.0, "recall@2": 1.0}
