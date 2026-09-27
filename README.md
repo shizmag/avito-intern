@@ -65,6 +65,10 @@ Repository verifier / thin CLI:
 PYTHONPATH=src .venv/bin/python main.py verify
 ```
 
+Verifier reports `PASS` only after selected artifacts exist. Fresh checkout currently reports `BLOCKED` with missing `artifacts/selected/manifest.json`; this is intentional and prevents confusing source presence with completed training.
+
+Selected artifact creation requires running selected retrieval/training workflow with local model cache and validation data; no fake manifest is generated.
+
 Submission validation:
 
 ```bash
