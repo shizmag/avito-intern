@@ -13,6 +13,7 @@ import pandas as pd
 
 from .artifacts import git_info
 from .config import Config, load_config, resolve_path
+from .data import build_canonical
 from .evaluation import evaluate_candidates
 from .fusion.rrf import reciprocal_rank_fusion
 from .inference import rank_predictions
@@ -28,6 +29,7 @@ from .retrievers.dense import (
 )
 from .retrievers.exact_search import exact_top_k
 from .retrievers.two_tower import TwoTowerModel
+from .splits import assign_item_splits, build_ground_truth
 from .submission import write_submission
 from .training.hard_negatives import mine_hard_negatives
 from .training.two_tower import (
@@ -159,17 +161,83 @@ def _normalise_items(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _prepare_workflow_paths(config: Config, data: Mapping[str, Any]) -> dict[str, Path]:
+    keys = (
+        "train_queries",
+        "train_items",
+        "train_pairs",
+        "validation_queries",
+        "validation_items",
+        "validation_ground_truth",
+        "benchmark_queries",
+        "benchmark_items",
+    )
+    if all(key in data for key in keys):
+        return {key: _data_path(config, data, key) for key in keys}
+    raw_train = _data_path(config, data, "train")
+    raw_queries = _data_path(config, data, "benchmark_queries")
+    raw_items = _data_path(config, data, "benchmark_items")
+    root = (
+        resolve_path(
+            config,
+            str(config.values.get("artifacts", {}).get("root", "artifacts/selected")),
+        )
+        / "prepared"
+    )
+    canonical = build_canonical(raw_train, raw_queries, raw_items, root / "data")
+    interactions = _frame(pd.read_parquet(canonical["interactions"]))
+    items = _frame(pd.read_parquet(canonical["items_train"]))
+    queries = _frame(pd.read_parquet(canonical["queries_train"]))
+    split_frame = assign_item_splits(
+        items["item_id"].astype(str).tolist(), seed=config.seed
+    )
+    ground_truth = build_ground_truth(interactions, split_frame)
+    train_ids = (
+        split_frame.loc[split_frame["split"] == "train", "item_id"].astype(str).tolist()
+    )
+    validation_ids = (
+        split_frame.loc[split_frame["split"] == "validation", "item_id"]
+        .astype(str)
+        .tolist()
+    )
+    train_pairs = interactions[
+        interactions["item_id"].astype(str).isin(train_ids)
+    ].copy()
+    validation_ground_truth = ground_truth.loc[
+        ground_truth["split"] == "validation", ["internal_query_id", "item_id"]
+    ].copy()
+    train_query_ids = train_pairs["internal_query_id"].astype(str).tolist()
+    validation_query_ids = (
+        validation_ground_truth["internal_query_id"].astype(str).tolist()
+    )
+    prepared = {
+        "train_queries": queries[
+            queries["internal_query_id"].astype(str).isin(train_query_ids)
+        ],
+        "train_items": items[items["item_id"].astype(str).isin(train_ids)],
+        "train_pairs": train_pairs,
+        "validation_queries": queries[
+            queries["internal_query_id"].astype(str).isin(validation_query_ids)
+        ],
+        "validation_items": items[items["item_id"].astype(str).isin(validation_ids)],
+        "validation_ground_truth": validation_ground_truth,
+        "benchmark_queries": _frame(pd.read_parquet(canonical["benchmark_queries"])),
+        "benchmark_items": _frame(pd.read_parquet(canonical["benchmark_items"])),
+    }
+    paths: dict[str, Path] = {}
+    for name, frame in prepared.items():
+        path = root / f"{name}.parquet"
+        frame.to_parquet(path, index=False)
+        paths[name] = path
+    return paths
+
+
 def _load_workflow_data(config: Config) -> WorkflowData:
     data = _data_config(config)
-    train_queries = _normalise_queries(
-        _frame(pd.read_parquet(_data_path(config, data, "train_queries", ("queries",))))
-    )
-    train_items = _normalise_items(
-        _frame(pd.read_parquet(_data_path(config, data, "train_items", ("items",))))
-    )
-    train_pairs = _frame(
-        pd.read_parquet(_data_path(config, data, "train_pairs"))
-    ).copy()
+    paths = _prepare_workflow_paths(config, data)
+    train_queries = _normalise_queries(_frame(pd.read_parquet(paths["train_queries"])))
+    train_items = _normalise_items(_frame(pd.read_parquet(paths["train_items"])))
+    train_pairs = _frame(pd.read_parquet(paths["train_pairs"])).copy()
     required_pairs = {"internal_query_id", "item_id"}
     if not required_pairs.issubset(train_pairs.columns):
         raise ValueError("train_pairs requires internal_query_id and item_id")
@@ -203,13 +271,7 @@ def _load_workflow_data(config: Config) -> WorkflowData:
         raise ValueError("train_pairs references unknown query or item")
 
     validation_queries = _normalise_queries(
-        _frame(
-            pd.read_parquet(
-                _data_path(
-                    config, data, "validation_queries", ("queries", "train_queries")
-                )
-            )
-        )
+        _frame(pd.read_parquet(paths["validation_queries"]))
     )
     validation_items = _normalise_items(
         _frame(
@@ -218,11 +280,7 @@ def _load_workflow_data(config: Config) -> WorkflowData:
             )
         )
     )
-    ground_truth = _frame(
-        pd.read_parquet(
-            _data_path(config, data, "validation_ground_truth", ("ground_truth",))
-        )
-    )
+    ground_truth = _frame(pd.read_parquet(paths["validation_ground_truth"]))
     if "split" in ground_truth:
         ground_truth = _frame(
             ground_truth.loc[ground_truth["split"] == "validation"].copy()
@@ -231,22 +289,10 @@ def _load_workflow_data(config: Config) -> WorkflowData:
         ground_truth[["internal_query_id", "item_id"]].drop_duplicates()
     )
     benchmark_queries = _normalise_queries(
-        _frame(
-            pd.read_parquet(
-                _data_path(
-                    config, data, "benchmark_queries", ("validation_queries", "queries")
-                )
-            )
-        )
+        _frame(pd.read_parquet(paths["benchmark_queries"]))
     )
     benchmark_items = _normalise_items(
-        _frame(
-            pd.read_parquet(
-                _data_path(
-                    config, data, "benchmark_items", ("validation_items", "items")
-                )
-            )
-        )
+        _frame(pd.read_parquet(paths["benchmark_items"]))
     )
     return WorkflowData(
         train_queries=train_queries,

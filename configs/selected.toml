@@ -2,6 +2,14 @@
 repo_root = ".."
 seed = 42
 
+[artifacts]
+root = "artifacts/selected"
+
+[data]
+train = "data/train.parquet"
+benchmark_queries = "data/benchmark_queries.parquet"
+benchmark_items = "data/benchmark_items.parquet"
+
 [selection]
 source = "rrf"
 retrievers = ["bm25", "dense", "two_tower"]
@@ -12,3 +20,22 @@ fusion = "rrf"
 [dense]
 model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 revision = "local-cache-required"
+batch_size = 32
+normalize = true
+max_length = 256
+device = "cpu"
+
+[two_tower]
+dimension = 32
+epochs = 1
+batch_size = 32
+temperature = 0.07
+learning_rate = 0.001
+device = "cpu"
+vocab_size = 65537
+
+[hard_negatives]
+max_per_query = 20
+
+[fusion]
+rrf_k = 60
