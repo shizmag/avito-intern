@@ -1,14 +1,17 @@
 import numpy as np
 import pandas as pd
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
+
 from avito_candidate_generation.candidates import (
     CandidateError,
     rank_candidates,
     validate_candidates,
 )
 from avito_candidate_generation.evaluation import recall_at_k
-from avito_candidate_generation.retrievers.exact_search import exact_top_k
 from avito_candidate_generation.retrievers.bm25 import retrieve_bm25
+from avito_candidate_generation.retrievers.exact_search import exact_top_k
 
 
 def test_candidate_validation_and_tie_break():
@@ -56,3 +59,64 @@ def test_exact_search_and_bm25():
     queries = pd.DataFrame({"internal_query_id": ["q"], "text": ["phone"]})
     result = retrieve_bm25(queries, items, k=2)
     assert result.iloc[0].item_id == "a"
+
+
+@given(
+    query_count=st.integers(min_value=1, max_value=4),
+    item_count=st.integers(min_value=1, max_value=8),
+)
+def test_exact_search_returns_unique_stable_top_k(
+    query_count: int, item_count: int
+) -> None:
+    query_embeddings = np.eye(max(query_count, 1), 3, dtype=np.float32)[:query_count]
+    item_embeddings = np.zeros((item_count, 3), dtype=np.float32)
+    item_embeddings[:, 0] = 1.0
+    result = exact_top_k(
+        query_embeddings,
+        item_embeddings,
+        [f"i{index}" for index in range(item_count)],
+        k=item_count + 3,
+        query_ids=[f"q{index}" for index in range(query_count)],
+    )
+    assert len(result) == query_count * item_count
+    unique_counts = result.groupby("internal_query_id")["item_id"].nunique().tolist()
+    assert unique_counts == [item_count] * query_count
+
+
+@given(
+    relevant_count=st.integers(min_value=1, max_value=5),
+    prediction_count=st.integers(min_value=0, max_value=8),
+)
+def test_recall_is_bounded(relevant_count: int, prediction_count: int) -> None:
+    relevant = pd.DataFrame(
+        {
+            "internal_query_id": ["q"] * relevant_count,
+            "item_id": [f"i{i}" for i in range(relevant_count)],
+        }
+    )
+    predictions = pd.DataFrame(
+        {
+            "internal_query_id": ["q"] * prediction_count,
+            "item_id": [f"i{i}" for i in range(prediction_count)],
+            "source": ["x"] * prediction_count,
+            "score": [1.0] * prediction_count,
+            "rank": list(range(1, prediction_count + 1)),
+        }
+    )
+    if prediction_count == 0:
+        value = recall_at_k(
+            pd.DataFrame(
+                {
+                    "internal_query_id": pd.Series(dtype=str),
+                    "item_id": pd.Series(dtype=str),
+                    "source": pd.Series(dtype=str),
+                    "score": pd.Series(dtype=float),
+                    "rank": pd.Series(dtype=int),
+                }
+            ),
+            relevant,
+            1,
+        )
+    else:
+        value = recall_at_k(predictions, relevant, prediction_count)
+    assert 0.0 <= value <= 1.0
