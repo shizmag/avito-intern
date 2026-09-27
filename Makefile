@@ -1,12 +1,22 @@
 PYTHON := .venv/bin/python
 export PYTHONPATH := src
 
-.PHONY: test test-ml coverage format-check lint typecheck ci
+.PHONY: test test-ml coverage format-check lint typecheck smoke train evaluate predict ci
 test:
 	$(PYTHON) -m pytest -q
 
 test-ml:
 	$(PYTHON) -m pytest tests/test_dense.py tests/test_two_tower.py tests/test_two_tower_hard.py tests/test_neural_retrieval.py tests/test_fusion.py tests/test_oof_catboost.py -q
+
+smoke:
+	$(PYTHON) -m avito_candidate_generation.cli smoke --config configs/smoke.toml --artifact-root artifacts/smoke
+
+train:
+	$(PYTHON) -m avito_candidate_generation.cli train --config configs/selected.toml
+evaluate:
+	$(PYTHON) -m avito_candidate_generation.cli evaluate --manifest artifacts/selected/manifest.json
+predict:
+	$(PYTHON) -m avito_candidate_generation.cli predict --manifest artifacts/selected/manifest.json --output answer.csv
 
 coverage:
 	$(PYTHON) -m pytest --cov=src/avito_candidate_generation --cov-report=term-missing --cov-fail-under=65 -q

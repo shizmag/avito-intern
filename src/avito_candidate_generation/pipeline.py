@@ -199,3 +199,82 @@ def build_selected_candidates(
     candidates = pd.concat(sources, ignore_index=True)
     validate_candidates(candidates)
     return reciprocal_rank_fusion(candidates, rrf_k=rrf_k, limit=retrieval_k)
+
+
+def compose_retrieval_tables(
+    queries: pd.DataFrame,
+    items: pd.DataFrame,
+    *,
+    query_columns: tuple[str, ...] = (
+        "search_query",
+        "search_infm_params_text",
+        "search_category",
+    ),
+    item_columns: tuple[str, ...] = (
+        "item_title_raw",
+        "item_infm_params_text",
+        "item_description_raw",
+    ),
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Create deterministic query/item text tables from canonical Avito fields."""
+    if "internal_query_id" not in queries or "item_id" not in items:
+        raise ValueError("canonical tables require internal_query_id and item_id")
+    missing_query = sorted(set(query_columns).difference(queries.columns))
+    missing_item = sorted(set(item_columns).difference(items.columns))
+    if missing_query or missing_item:
+        raise ValueError(
+            f"missing retrieval fields: queries={missing_query}, items={missing_item}"
+        )
+    query_text = (
+        queries[list(query_columns)]
+        .fillna("")
+        .astype(str)
+        .agg(" ".join, axis=1)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+    item_text = (
+        items[list(item_columns)]
+        .fillna("")
+        .astype(str)
+        .agg(" ".join, axis=1)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+    return (
+        pd.DataFrame(
+            {
+                "internal_query_id": queries["internal_query_id"].astype(str),
+                "text": query_text,
+            }
+        ),
+        pd.DataFrame({"item_id": items["item_id"].astype(str), "text": item_text}),
+    )
+
+
+def write_selected_candidates(
+    candidates: pd.DataFrame,
+    output: str | Path,
+    *,
+    manifest: FinalPipeline,
+) -> Path:
+    required = {
+        "internal_query_id",
+        "item_id",
+        "source",
+        "score",
+        "rank",
+        "rrf_score",
+        "retriever_count",
+    }
+    if not required.issubset(candidates.columns):
+        raise ValueError(
+            f"selected candidates missing columns: {sorted(required.difference(candidates.columns))}"
+        )
+    validate_candidates(candidates)
+    target = Path(output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    candidates.sort_values(
+        ["internal_query_id", "rank", "item_id"], kind="mergesort"
+    ).to_parquet(target, index=False)
+    return target

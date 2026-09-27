@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path
 import tomllib
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -64,6 +64,8 @@ def load_config(path: str | Path) -> Config:
     if not isinstance(seed, int) or isinstance(seed, bool):
         raise ConfigError("config requires integer seed")
     root_value = values.get("repo_root")
+    if root_value is None and isinstance(project, dict):
+        root_value = project.get("repo_root")
     root = (
         (config_path.parent / root_value).resolve()
         if isinstance(root_value, str)
