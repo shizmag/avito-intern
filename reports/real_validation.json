@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "method": "bm25",
+  "split": "cold-item-validation",
+  "category_policy": "none",
+  "n_queries": 43413,
+  "n_items": 34370,
+  "n_relevant": 46360,
+  "candidate_k": 500,
+  "batch_size": 128,
+  "metrics": {
+    "recall@10": 0.18262415965062628,
+    "recall@20": 0.26274057998195943,
+    "recall@50": 0.3999534101496648,
+    "recall@100": 0.5248241741417745,
+    "recall@200": 0.6540667841770047,
+    "recall@500": 0.7891208824575562
+  },
+  "config_hash": "51944f77154268142e4432346471c53b6a7e439f167d39d612feb2e44b3af861",
+  "reason": "BM25-only real validation; neural ablations not run by this command"
+}

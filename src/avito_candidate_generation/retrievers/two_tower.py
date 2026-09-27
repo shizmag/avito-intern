@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Sequence
 from hashlib import blake2b
@@ -110,25 +111,86 @@ class TwoTowerModel(nn.Module):
             self.tensor_queries(query_batch), self.tensor_items(item_batch)
         )
 
-    def _numpy_encode(self, values: Sequence[str], tower: _TextTower) -> np.ndarray:
+    def _numpy_encode(
+        self,
+        values: Sequence[str],
+        tower: _TextTower,
+        *,
+        batch_size: int = 256,
+    ) -> np.ndarray:
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
         was_training = self.training
         self.eval()
+        chunks: list[np.ndarray] = []
         with torch.inference_mode():
-            result = (
-                self._encode_tensor(values, tower)
-                .detach()
-                .cpu()
-                .numpy()
-                .astype(np.float32)
-            )
+            for start in range(0, len(values), batch_size):
+                chunk = (
+                    self._encode_tensor(values[start : start + batch_size], tower)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32)
+                )
+                chunks.append(chunk)
         self.train(was_training)
-        return result
+        if not chunks:
+            return np.empty((0, self.dimension), dtype=np.float32)
+        return np.ascontiguousarray(np.vstack(chunks))
 
-    def encode_queries(self, query_batch: Sequence[str]) -> np.ndarray:
-        return self._numpy_encode(query_batch, self.query_tower)
+    def encode_queries(
+        self, query_batch: Sequence[str], *, batch_size: int = 256
+    ) -> np.ndarray:
+        return self._numpy_encode(query_batch, self.query_tower, batch_size=batch_size)
 
-    def encode_items(self, item_batch: Sequence[str]) -> np.ndarray:
-        return self._numpy_encode(item_batch, self.item_tower)
+    def encode_items(
+        self, item_batch: Sequence[str], *, batch_size: int = 256
+    ) -> np.ndarray:
+        return self._numpy_encode(item_batch, self.item_tower, batch_size=batch_size)
+
+    def encode_items_streaming(
+        self,
+        item_batch: Sequence[str],
+        path: str | Path,
+        *,
+        batch_size: int = 256,
+    ) -> np.ndarray:
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        if temporary.exists():
+            temporary.unlink()
+        result = np.lib.format.open_memmap(
+            temporary,
+            mode="w+",
+            dtype=np.float32,
+            shape=(len(item_batch), self.dimension),
+        )
+        was_training = self.training
+        self.eval()
+        try:
+            with torch.inference_mode():
+                for start in range(0, len(item_batch), batch_size):
+                    values = self._encode_tensor(
+                        item_batch[start : start + batch_size], self.item_tower
+                    )
+                    result[start : start + len(values)] = (
+                        values.detach().cpu().numpy().astype(np.float32)
+                    )
+            result.flush()
+            del result
+            if target.exists():
+                target.unlink()
+            os.replace(temporary, target)
+        except Exception:
+            if temporary.exists():
+                temporary.unlink()
+            raise
+        finally:
+            self.train(was_training)
+        return np.load(target, mmap_mode="r")
 
     def save(self, path: str | Path) -> Path:
         target = Path(path)

@@ -29,6 +29,44 @@ def test_bundle_load(tmp_path):
     assert path.exists()
 
 
+def test_bm25_no_match_uses_stable_zero_score_fallback() -> None:
+    from avito_candidate_generation.retrievers.bm25 import BM25Index
+
+    items = pd.DataFrame({"item_id": ["b", "a"], "text": ["red", "blue"]})
+    queries = pd.DataFrame({"internal_query_id": ["q"], "text": ["missing"]})
+    result = BM25Index.fit(items).retrieve(queries, k=2)
+    assert result["item_id"].tolist() == ["a", "b"]
+    assert result["score"].tolist() == [0.0, 0.0]
+
+
+def test_streaming_recall_matches_query_mean() -> None:
+    from avito_candidate_generation.validation import stream_recall_at_k
+
+    queries = pd.DataFrame({"internal_query_id": ["q1", "q2"]})
+    truth = pd.DataFrame({"internal_query_id": ["q1", "q2"], "item_id": ["a", "b"]})
+
+    def retrieve(batch: pd.DataFrame, k: int) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "internal_query_id": batch["internal_query_id"].tolist(),
+                "item_id": [
+                    "a" if q == "q1" else "x" for q in batch["internal_query_id"]
+                ],
+                "rank": [1] * len(batch),
+            }
+        )
+
+    assert stream_recall_at_k(queries, truth, retrieve, ks=(1,), batch_size=1) == {
+        "recall@1": 0.5
+    }
+
+
+def test_model_preflight_rejects_missing_local_artifact(tmp_path) -> None:
+    from avito_candidate_generation.provisioning import _has_required_model_files
+
+    assert not _has_required_model_files(tmp_path)
+
+
 def test_submission_roundtrip(tmp_path):
     queries = tmp_path / "queries.parquet"
     items = tmp_path / "items.parquet"

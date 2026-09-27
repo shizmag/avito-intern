@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,8 +25,9 @@ from .retrievers.dense import (
     EmbeddingArtifact,
     TextEncoder,
     TransformerTextEncoder,
-    build_embedding_artifact,
+    build_embedding_artifact_streaming,
     encode_texts,
+    load_cached_embedding_artifact,
     save_embedding_artifact,
 )
 from .retrievers.exact_search import exact_top_k
@@ -161,6 +164,73 @@ def _normalise_items(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _prepared_cache_hit(
+    root: Path, inputs: Mapping[str, Path], *, seed: int
+) -> dict[str, Path] | None:
+    manifest_path = root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("schema_version") != 1 or manifest.get("seed") != seed:
+            return None
+        expected_inputs = {
+            name: {"path": str(path), "sha256": _file_sha256(path)}
+            for name, path in inputs.items()
+        }
+        if manifest.get("inputs") != expected_inputs:
+            return None
+        output_names = manifest.get("outputs")
+        if not isinstance(output_names, dict):
+            return None
+        paths = {name: root / str(value) for name, value in output_names.items()}
+        required = {
+            "train_queries",
+            "train_items",
+            "train_pairs",
+            "validation_queries",
+            "validation_items",
+            "validation_ground_truth",
+            "benchmark_queries",
+            "benchmark_items",
+        }
+        if set(paths) != required or not all(path.is_file() for path in paths.values()):
+            return None
+        if not (root / "data" / "data_report.json").is_file():
+            return None
+        return paths
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _write_prepared_manifest(
+    root: Path, inputs: Mapping[str, Path], outputs: Mapping[str, Path], seed: int
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "algorithm": "workflow-prepared-v1",
+        "seed": seed,
+        "inputs": {
+            name: {"path": str(path), "sha256": _file_sha256(path)}
+            for name, path in inputs.items()
+        },
+        "outputs": {
+            name: str(path.relative_to(root)) for name, path in outputs.items()
+        },
+    }
+    temporary = root / "manifest.json.tmp"
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    os.replace(temporary, root / "manifest.json")
+
+
 def _prepare_workflow_paths(config: Config, data: Mapping[str, Any]) -> dict[str, Path]:
     keys = (
         "train_queries",
@@ -184,6 +254,15 @@ def _prepare_workflow_paths(config: Config, data: Mapping[str, Any]) -> dict[str
         )
         / "prepared"
     )
+    root.mkdir(parents=True, exist_ok=True)
+    inputs = {
+        "train": raw_train,
+        "benchmark_queries": raw_queries,
+        "benchmark_items": raw_items,
+    }
+    cached = _prepared_cache_hit(root, inputs, seed=config.seed)
+    if cached is not None:
+        return cached
     canonical = build_canonical(raw_train, raw_queries, raw_items, root / "data")
     interactions = _frame(pd.read_parquet(canonical["interactions"]))
     items = _frame(pd.read_parquet(canonical["items_train"]))
@@ -229,6 +308,7 @@ def _prepare_workflow_paths(config: Config, data: Mapping[str, Any]) -> dict[str
         path = root / f"{name}.parquet"
         frame.to_parquet(path, index=False)
         paths[name] = path
+    _write_prepared_manifest(root, inputs, paths, config.seed)
     return paths
 
 
@@ -274,11 +354,7 @@ def _load_workflow_data(config: Config) -> WorkflowData:
         _frame(pd.read_parquet(paths["validation_queries"]))
     )
     validation_items = _normalise_items(
-        _frame(
-            pd.read_parquet(
-                _data_path(config, data, "validation_items", ("items", "train_items"))
-            )
-        )
+        _frame(pd.read_parquet(paths["validation_items"]))
     )
     ground_truth = _frame(pd.read_parquet(paths["validation_ground_truth"]))
     if "split" in ground_truth:
@@ -316,39 +392,69 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
 
 
 def _save_embeddings(
-    encoder: TextEncoder, items: pd.DataFrame, directory: Path, model: str
+    encoder: TextEncoder,
+    items: pd.DataFrame,
+    directory: Path,
+    model: str,
+    *,
+    revision: str = "unknown",
+    batch_size: int = 32,
 ) -> EmbeddingArtifact:
-    artifact = build_embedding_artifact(
-        encoder,
-        items["item_id"].tolist(),
-        items["text"].tolist(),
+    item_ids = items["item_id"].tolist()
+    texts = items["text"].tolist()
+    cached = load_cached_embedding_artifact(
+        directory,
+        item_ids=item_ids,
+        texts=texts,
         model=model,
-        revision="local-cache-required",
-        batch_size=32,
+        revision=revision,
+    )
+    if cached is not None:
+        return cached
+    artifact = build_embedding_artifact_streaming(
+        encoder,
+        item_ids,
+        texts,
+        directory,
+        model=model,
+        revision=revision,
+        batch_size=batch_size,
     )
     save_embedding_artifact(artifact, directory)
     return artifact
 
 
 def _save_tower_embeddings(
-    model: TwoTowerModel, items: pd.DataFrame, directory: Path, stage: str
+    model: TwoTowerModel,
+    items: pd.DataFrame,
+    directory: Path,
+    stage: str,
+    *,
+    batch_size: int = 256,
 ) -> EmbeddingArtifact:
-    embeddings = model.encode_items(items["text"].tolist())
-    try:
-        dimension = int(embeddings.shape[1])
-    except (AttributeError, IndexError, TypeError, ValueError) as exc:
-        raise ValueError("invalid two-tower embedding shape") from exc
+    directory.mkdir(parents=True, exist_ok=True)
+    embedding_path = directory / "embeddings.npy"
+    embeddings = model.encode_items_streaming(
+        items["text"].tolist(), embedding_path, batch_size=batch_size
+    )
     artifact = EmbeddingArtifact(
         embeddings,
         tuple(items["item_id"].tolist()),
         {
             "model": "TwoTowerModel",
             "stage": stage,
-            "dimension": dimension,
+            "dimension": model.dimension,
             "normalized": True,
         },
     )
-    save_embedding_artifact(artifact, directory)
+    (directory / "item_ids.json").write_text(
+        json.dumps(list(artifact.item_ids), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    (directory / "metadata.json").write_text(
+        json.dumps(artifact.metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     return artifact
 
 
@@ -358,11 +464,14 @@ def _retrieve_sources(
     encoder: TextEncoder,
     generic: EmbeddingArtifact,
     tower: TwoTowerModel,
+    tower_items: EmbeddingArtifact,
     k: int,
+    *,
+    encoder_batch_size: int = 32,
 ) -> list[pd.DataFrame]:
     bm25 = retrieve_bm25(queries, items, k=k)
     dense = exact_top_k(
-        encode_texts(encoder, queries["text"].tolist(), batch_size=32),
+        encode_texts(encoder, queries["text"].tolist(), batch_size=encoder_batch_size),
         generic.embeddings,
         list(generic.item_ids),
         k=k,
@@ -370,9 +479,9 @@ def _retrieve_sources(
         source="dense",
     )
     tower_candidates = exact_top_k(
-        tower.encode_queries(queries["text"].tolist()),
-        tower.encode_items(items["text"].tolist()),
-        items["item_id"].tolist(),
+        tower.encode_queries(queries["text"].tolist(), batch_size=encoder_batch_size),
+        tower_items.embeddings,
+        list(tower_items.item_ids),
         k=k,
         query_ids=queries["internal_query_id"].tolist(),
         source="two_tower",
@@ -435,10 +544,19 @@ def train_selected(
             max_length = int(dense_config.get("max_length", 256))
         except (TypeError, ValueError) as exc:
             raise ValueError("invalid dense max_length configuration") from exc
+        configured_model_path = Path(
+            str(dense_config.get("model_path", model_name))
+        ).expanduser()
+        model_path = (
+            configured_model_path
+            if configured_model_path.is_absolute()
+            else resolve_path(config, configured_model_path)
+        )
         encoder = TransformerTextEncoder(
-            model_name,
-            device=str(dense_config.get("device", "cpu")),
+            str(model_path),
+            device=str(dense_config.get("device", "auto")),
             max_length=max_length,
+            revision=str(dense_config.get("revision", "unknown")),
         )
     else:
         model_name = str(dense_config.get("model", encoder.__class__.__name__))
@@ -450,9 +568,20 @@ def train_selected(
 
     lexical_dir = root / "lexical"
     lexical_dir.mkdir(parents=True, exist_ok=True)
-    BM25Index.fit(data.train_items).save(lexical_dir / "bm25.json")
+    BM25Index.fit(data.train_items).save(lexical_dir / "bm25.npz")
+    try:
+        encoder_batch_size = int(dense_config.get("batch_size", 32))
+        tower_batch_size = int(tower_config.get("encode_batch_size", 256))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid encoder batch-size configuration") from exc
+    model_revision = str(dense_config.get("revision", "unknown"))
     generic_train = _save_embeddings(
-        encoder, data.train_items, root / "embeddings/generic/train", model_name
+        encoder,
+        data.train_items,
+        root / "embeddings/generic/train",
+        model_name,
+        revision=model_revision,
+        batch_size=encoder_batch_size,
     )
     try:
         tower_config_obj = TrainingConfig(
@@ -478,12 +607,23 @@ def train_selected(
     )
     v1_path = root / "two_tower/v1/checkpoint.json"
     tower_v1.save(v1_path)
-    _save_tower_embeddings(
-        tower_v1, data.train_items, root / "embeddings/two_tower/v1/train", "v1"
+    tower_v1_train = _save_tower_embeddings(
+        tower_v1,
+        data.train_items,
+        root / "embeddings/two_tower/v1/train",
+        "v1",
+        batch_size=tower_batch_size,
     )
 
     train_sources = _retrieve_sources(
-        data.train_queries, data.train_items, encoder, generic_train, tower_v1, k
+        data.train_queries,
+        data.train_items,
+        encoder,
+        generic_train,
+        tower_v1,
+        tower_v1_train,
+        k,
+        encoder_batch_size=encoder_batch_size,
     )
     positives = cast(pd.DataFrame, data.train_pairs[["internal_query_id", "item_id"]])
     try:
@@ -541,12 +681,15 @@ def train_selected(
         data.validation_items,
         root / "embeddings/generic/validation",
         model_name,
+        revision=model_revision,
+        batch_size=encoder_batch_size,
     )
-    _save_tower_embeddings(
+    tower_v2_validation = _save_tower_embeddings(
         tower_v2,
         data.validation_items,
         root / "embeddings/two_tower/v2/validation",
         "v2",
+        batch_size=tower_batch_size,
     )
     validation_sources = _retrieve_sources(
         data.validation_queries,
@@ -554,7 +697,9 @@ def train_selected(
         encoder,
         generic_validation,
         tower_v2,
+        tower_v2_validation,
         k,
+        encoder_batch_size=encoder_batch_size,
     )
     candidate_dir = root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
@@ -592,7 +737,19 @@ def train_selected(
     metrics_path = _write_json(root / "metrics/validation.json", metric_payload)
 
     benchmark_generic = _save_embeddings(
-        encoder, data.benchmark_items, root / "embeddings/generic/benchmark", model_name
+        encoder,
+        data.benchmark_items,
+        root / "embeddings/generic/benchmark",
+        model_name,
+        revision=model_revision,
+        batch_size=encoder_batch_size,
+    )
+    tower_v2_benchmark = _save_tower_embeddings(
+        tower_v2,
+        data.benchmark_items,
+        root / "embeddings/two_tower/v2/benchmark",
+        "v2",
+        batch_size=tower_batch_size,
     )
     benchmark_sources = _retrieve_sources(
         data.benchmark_queries,
@@ -600,7 +757,9 @@ def train_selected(
         encoder,
         benchmark_generic,
         tower_v2,
+        tower_v2_benchmark,
         k,
+        encoder_batch_size=encoder_batch_size,
     )
     benchmark_rrf = reciprocal_rank_fusion(
         cast(pd.DataFrame, pd.concat(benchmark_sources, ignore_index=True)),
@@ -622,12 +781,18 @@ def train_selected(
     )
     components = {
         "dense_model": model_name,
-        "bm25_index": "lexical/bm25.json",
+        "dense_model_revision": model_revision,
+        "dense_model_path": str(dense_config.get("model_path", model_name)),
+        "bm25_index": "lexical/bm25.npz",
         "two_tower_checkpoint": "two_tower/v2/checkpoint.json",
         "metrics": str(metrics_path.relative_to(root)),
         "predictions": str(prediction_path.relative_to(root)),
         "benchmark_queries": str(benchmark_queries_path),
         "benchmark_items": str(benchmark_items_path),
+        "category_policy": str(selection.get("category_policy", "unspecified")),
+        "split": "cold-item-validation",
+        "seed": config.seed,
+        "retrieval_device": str(dense_config.get("device", "cpu")),
     }
     manifest = SelectedManifest(
         1,

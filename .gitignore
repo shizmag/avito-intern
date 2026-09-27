@@ -11,3 +11,4 @@ artifacts/
 reports/generated/
 answer.csv
 .DS_Store
+.coverage

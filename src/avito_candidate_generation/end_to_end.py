@@ -9,8 +9,8 @@ from typing import Any
 from .verify import verify_repository
 
 
-def run_end_to_end(root: str | Path = ".") -> dict[str, Any]:
-    result = verify_repository(root)
+def run_end_to_end(root: str | Path = ".", *, strict: bool = False) -> dict[str, Any]:
+    result = verify_repository(root, strict=strict)
     checks = result["checks"]
     artifact_status = str(result["messages"].get("selected_artifact_status", "NOT_RUN"))
     selected_ready = artifact_status == "IMPLEMENTED"

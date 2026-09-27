@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,13 +29,25 @@ class EmbeddingArtifact:
 
 
 def _fingerprint(texts: Sequence[str], metadata: dict[str, Any]) -> str:
-    payload = json.dumps(
-        {"texts": list(texts), "metadata": metadata},
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
+    digest = hashlib.sha256()
+    ids = metadata.get("item_ids")
+    base_metadata = {key: value for key, value in metadata.items() if key != "item_ids"}
+    digest.update(
+        json.dumps(
+            base_metadata, ensure_ascii=False, sort_keys=True, default=str
+        ).encode("utf-8")
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    digest.update(b"\x00")
+    if isinstance(ids, (list, tuple)):
+        for item_id in ids:
+            value = str(item_id).encode("utf-8")
+            digest.update(len(value).to_bytes(8, "big"))
+            digest.update(value)
+    for text in texts:
+        value = str(text).encode("utf-8")
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+    return digest.hexdigest()
 
 
 def encode_texts(
@@ -75,6 +89,7 @@ class TransformerTextEncoder:
         device: str = "cpu",
         normalize: bool = True,
         max_length: int = 256,
+        revision: str | None = None,
     ) -> None:
         try:
             import torch  # type: ignore[import-not-found]
@@ -87,9 +102,19 @@ class TransformerTextEncoder:
                 "TransformerTextEncoder requires torch and transformers"
             ) from exc
         self._torch = torch
-        self.device = torch.device(device)
+        resolved_device = device
+        if device == "auto":
+            resolved_device = (
+                "mps"
+                if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                else "cpu"
+            )
+        self.device = torch.device(resolved_device)
+        self.requested_device = device
         self.normalize = normalize
         self.max_length = max_length
+        self.model_name_or_path = model_name_or_path
+        self.revision = revision or "unknown"
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 model_name_or_path, local_files_only=True
@@ -99,7 +124,9 @@ class TransformerTextEncoder:
             ).to(self.device)
         except Exception as exc:
             raise RuntimeError(
-                f"model is not available in local Hugging Face cache: {model_name_or_path}"
+                "model is not available in local Hugging Face cache; run "
+                "'uv run avito prepare' or provide a valid offline model path: "
+                f"{model_name_or_path}"
             ) from exc
         self.model.eval()
         try:
@@ -109,37 +136,140 @@ class TransformerTextEncoder:
                 "loaded transformer has no valid hidden dimension"
             ) from exc
 
+    def _encode_batch(self, batch: Sequence[str]) -> np.ndarray:
+        with self._torch.inference_mode():
+            tokens = self.tokenizer(
+                list(batch),
+                padding=True,
+                truncation=True,
+                max_length=self.max_length,
+                return_tensors="pt",
+            ).to(self.device)
+            outputs = self.model(**tokens)
+            mask = (
+                tokens["attention_mask"]
+                .unsqueeze(-1)
+                .to(outputs.last_hidden_state.dtype)
+            )
+            pooled = (outputs.last_hidden_state * mask).sum(dim=1) / mask.sum(
+                dim=1
+            ).clamp_min(1)
+            if self.normalize:
+                pooled = self._torch.nn.functional.normalize(pooled, p=2, dim=1)
+            result = pooled.detach().cpu().numpy().astype(np.float32, copy=False)
+            del pooled, outputs, mask, tokens
+            if self.device.type == "mps":
+                self._torch.mps.empty_cache()
+            return result
+
     def encode(self, texts: Sequence[str], *, batch_size: int = 32) -> np.ndarray:
         if batch_size < 1:
             raise ValueError("batch_size must be positive")
-        rows: list[np.ndarray] = []
-        with self._torch.inference_mode():
-            for start in range(0, len(texts), batch_size):
-                batch = list(texts[start : start + batch_size])
-                tokens = self.tokenizer(
-                    batch,
-                    padding=True,
-                    truncation=True,
-                    max_length=self.max_length,
-                    return_tensors="pt",
-                ).to(self.device)
-                outputs = self.model(**tokens)
-                mask = (
-                    tokens["attention_mask"]
-                    .unsqueeze(-1)
-                    .to(outputs.last_hidden_state.dtype)
-                )
-                pooled = (outputs.last_hidden_state * mask).sum(dim=1) / mask.sum(
-                    dim=1
-                ).clamp_min(1)
-                if self.normalize:
-                    pooled = self._torch.nn.functional.normalize(pooled, p=2, dim=1)
-                rows.append(
-                    pooled.detach().cpu().numpy().astype(np.float32, copy=False)
-                )
+        rows = [
+            self._encode_batch(texts[start : start + batch_size])
+            for start in range(0, len(texts), batch_size)
+        ]
         return (
             np.vstack(rows) if rows else np.empty((0, self.dimension), dtype=np.float32)
         )
+
+
+def build_embedding_artifact_streaming(
+    encoder: TextEncoder,
+    item_ids: Sequence[str],
+    texts: Sequence[str],
+    directory: str | Path,
+    *,
+    model: str = "local",
+    revision: str = "unknown",
+    batch_size: int = 32,
+    normalize: bool = True,
+) -> EmbeddingArtifact:
+    """Encode and persist items batch-by-batch without a full RAM matrix."""
+    if len(item_ids) != len(texts):
+        raise ValueError("item_ids and texts length mismatch")
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    if not texts:
+        raise ValueError("cannot build empty embedding artifact")
+    target = Path(directory)
+    cached = load_cached_embedding_artifact(
+        target, item_ids=item_ids, texts=texts, model=model, revision=revision
+    )
+    if cached is not None:
+        return cached
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    if temporary.exists():
+        try:
+            shutil.rmtree(temporary)
+        except OSError as exc:
+            raise ValueError("unable to clear temporary embedding artifact") from exc
+    temporary.mkdir(parents=True, exist_ok=True)
+    matrix: np.memmap | None = None
+    dimension = 0
+    try:
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            values = np.asarray(
+                encoder.encode(batch, batch_size=batch_size), dtype=np.float32
+            )
+            if values.ndim != 2 or values.shape[0] != len(batch):
+                raise ValueError("encoder returned invalid shape")
+            if not np.isfinite(values).all():
+                raise ValueError("encoder returned non-finite embeddings")
+            if matrix is None:
+                dimension = int(values.shape[1])
+                if dimension < 1:
+                    raise ValueError("encoder returned empty embedding dimension")
+                matrix = np.lib.format.open_memmap(
+                    temporary / "embeddings.npy",
+                    mode="w+",
+                    dtype=np.float32,
+                    shape=(len(texts), dimension),
+                )
+            elif values.shape[1] != dimension:
+                raise ValueError("encoder returned inconsistent dimensions")
+            if normalize:
+                norms = np.linalg.norm(values, axis=1, keepdims=True)
+                if (norms == 0).any():
+                    raise ValueError("zero embedding cannot be normalized")
+                values = values / norms
+            matrix[start : start + len(batch)] = values
+        if matrix is None:
+            raise ValueError("encoder returned no embeddings")
+        matrix.flush()
+        del matrix
+        metadata: dict[str, Any] = {
+            "model": model,
+            "revision": revision,
+            "dimension": dimension,
+            "normalized": normalize,
+            "fingerprint": _fingerprint(
+                texts,
+                {
+                    "item_ids": [str(x) for x in item_ids],
+                    "model": model,
+                    "revision": revision,
+                },
+            ),
+        }
+        (temporary / "item_ids.json").write_text(
+            json.dumps([str(x) for x in item_ids], ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        (temporary / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        if target.exists():
+            shutil.rmtree(target)
+        os.replace(temporary, target)
+    except Exception:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+    return load_embedding_artifact(target)
 
 
 def build_embedding_artifact(
@@ -172,29 +302,69 @@ def build_embedding_artifact(
         "revision": revision,
         "dimension": dimension,
         "normalized": normalize,
-        "fingerprint": _fingerprint(texts, {"model": model, "revision": revision}),
+        "fingerprint": _fingerprint(
+            texts,
+            {
+                "item_ids": [str(x) for x in item_ids],
+                "model": model,
+                "revision": revision,
+            },
+        ),
     }
     return EmbeddingArtifact(embeddings, tuple(str(x) for x in item_ids), metadata)
 
 
 def save_embedding_artifact(artifact: EmbeddingArtifact, directory: str | Path) -> Path:
     out = Path(directory)
-    out.mkdir(parents=True, exist_ok=True)
-    np.save(out / "embeddings.npy", artifact.embeddings)
-    (out / "item_ids.json").write_text(
+    out.parent.mkdir(parents=True, exist_ok=True)
+    temporary = out.with_name(out.name + ".tmp")
+    if temporary.exists():
+        for child in temporary.iterdir():
+            child.unlink()
+    temporary.mkdir(parents=True, exist_ok=True)
+    np.save(temporary / "embeddings.npy", artifact.embeddings)
+    (temporary / "item_ids.json").write_text(
         json.dumps(list(artifact.item_ids), ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    (out / "metadata.json").write_text(
+    (temporary / "metadata.json").write_text(
         json.dumps(artifact.metadata, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    if out.exists():
+        for child in out.iterdir():
+            child.unlink()
+        out.rmdir()
+    os.replace(temporary, out)
     return out
+
+
+def load_cached_embedding_artifact(
+    directory: str | Path,
+    *,
+    item_ids: Sequence[str],
+    texts: Sequence[str],
+    model: str,
+    revision: str,
+) -> EmbeddingArtifact | None:
+    try:
+        artifact = load_embedding_artifact(directory)
+    except ValueError:
+        return None
+    expected = _fingerprint(
+        texts,
+        {"item_ids": [str(x) for x in item_ids], "model": model, "revision": revision},
+    )
+    if artifact.item_ids != tuple(str(x) for x in item_ids):
+        return None
+    if artifact.metadata.get("fingerprint") != expected:
+        return None
+    return artifact
 
 
 def load_embedding_artifact(directory: str | Path) -> EmbeddingArtifact:
     out = Path(directory)
     try:
-        embeddings = np.load(out / "embeddings.npy")
+        embeddings = np.load(out / "embeddings.npy", mmap_mode="r")
         item_ids = tuple(
             json.loads((out / "item_ids.json").read_text(encoding="utf-8"))
         )
@@ -209,7 +379,7 @@ def load_embedding_artifact(directory: str | Path) -> EmbeddingArtifact:
         raise ValueError("invalid embedding artifact")
     if metadata.get("dimension") != embeddings.shape[1]:
         raise ValueError("embedding metadata dimension mismatch")
-    return EmbeddingArtifact(np.ascontiguousarray(embeddings), item_ids, metadata)
+    return EmbeddingArtifact(embeddings, item_ids, metadata)
 
 
 def retrieve_dense(

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-import math
 import json
+import math
 from pathlib import Path
-from typing import Sequence
 
+import numpy as np
 import pandas as pd
 
 from ..preprocessing import tokenize
@@ -22,15 +23,54 @@ class BM25Index:
 
     def __post_init__(self) -> None:
         self.document_frequency: dict[str, int] = {}
-        for document in self.documents:
-            for term in set(document):
+        self.postings: dict[str, list[tuple[int, int]]] = {}
+        for index, document in enumerate(self.documents):
+            counts: dict[str, int] = {}
+            for term in document:
+                counts[term] = counts.get(term, 0) + 1
+            for term, frequency in counts.items():
                 self.document_frequency[term] = self.document_frequency.get(term, 0) + 1
-        self.average_length = sum(map(len, self.documents)) / max(
-            1, len(self.documents)
+                self.postings.setdefault(term, []).append((index, frequency))
+        self.document_lengths = [len(document) for document in self.documents]
+        self.average_length = sum(self.document_lengths) / max(1, len(self.documents))
+        self._idf = {
+            term: math.log(
+                1.0 + (len(self.documents) - frequency + 0.5) / (frequency + 0.5)
+            )
+            for term, frequency in self.document_frequency.items()
+        }
+        self._item_order = sorted(
+            range(len(self.item_ids)), key=self.item_ids.__getitem__
         )
+        self._posting_indices = {
+            term: np.asarray([index for index, _ in postings], dtype=np.int64)
+            for term, postings in self.postings.items()
+        }
+        self._posting_contributions = {
+            term: np.asarray(
+                [
+                    self._idf[term]
+                    * (tf * (self.k1 + 1))
+                    / (
+                        tf
+                        + self.k1
+                        * (
+                            1
+                            - self.b
+                            + self.b
+                            * self.document_lengths[index]
+                            / max(self.average_length, 1e-12)
+                        )
+                    )
+                    for index, tf in postings
+                ],
+                dtype=np.float64,
+            )
+            for term, postings in self.postings.items()
+        }
 
     @classmethod
-    def fit(cls, items: pd.DataFrame, text_column: str = "text") -> "BM25Index":
+    def fit(cls, items: pd.DataFrame, text_column: str = "text") -> BM25Index:
         return cls(
             items["item_id"].astype(str).tolist(),
             [tokenize(str(x) if pd.notna(x) else "") for x in items[text_column]],
@@ -39,15 +79,12 @@ class BM25Index:
     def score(self, query: Sequence[str], document: tuple[str, ...]) -> float:
         counts = {term: document.count(term) for term in set(document)}
         result = 0.0
-        n = len(self.documents)
         for term in query:
-            if term not in counts:
+            tf = counts.get(term)
+            if tf is None:
                 continue
-            df = self.document_frequency.get(term, 0)
-            idf = math.log(1.0 + (n - df + 0.5) / (df + 0.5))
-            tf = counts[term]
             result += (
-                idf
+                self._idf[term]
                 * (tf * (self.k1 + 1))
                 / (
                     tf
@@ -61,54 +98,131 @@ class BM25Index:
             )
         return result
 
+    def _retrieve_indices(
+        self, tokens: Sequence[str], k: int
+    ) -> list[tuple[int, float]]:
+        scores = np.zeros(len(self.item_ids), dtype=np.float64)
+        for term in tokens:
+            indices = self._posting_indices.get(term)
+            if indices is not None:
+                scores[indices] += self._posting_contributions[term]
+        matched = np.flatnonzero(scores > 0.0)
+        try:
+            if len(matched) > k:
+                positive_scores = scores[matched]
+                boundary_index = int(np.argpartition(positive_scores, -k)[-k])
+                boundary = float(positive_scores[boundary_index])
+                matched = matched[positive_scores >= boundary]
+            ordered = sorted(
+                (int(index) for index in matched),
+                key=lambda index: (-float(scores[index]), self.item_ids[index]),
+            )[:k]
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError("invalid BM25 scores") from exc
+        if len(ordered) < k:
+            matched_set = set(ordered)
+            ordered.extend(
+                index for index in self._item_order if index not in matched_set
+            )
+            ordered = ordered[:k]
+        try:
+            return [(index, float(scores[index])) for index in ordered]
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError("invalid BM25 scores") from exc
+
     def retrieve(
         self,
         queries: pd.DataFrame,
         query_column: str = "text",
         k: int = 50,
         source: str = "bm25",
+        query_batch_size: int = 256,
     ) -> pd.DataFrame:
+        if k < 1 or query_batch_size < 1:
+            raise ValueError("k and query_batch_size must be positive")
         rows: list[tuple[str, str, str, float, int]] = []
-        for _, query in queries.iterrows():
-            qid = str(query["internal_query_id"])
-            value = query[query_column]
-            tokens = tokenize(str(value) if value is not None else "")
-            order = sorted(
-                (
-                    (self.score(tokens, doc), item_id)
-                    for item_id, doc in zip(self.item_ids, self.documents)
-                ),
-                key=lambda pair: (-pair[0], pair[1]),
-            )[:k]
-            try:
-                rows.extend((qid, item_id, source, float(score), rank) for rank, (score, item_id) in enumerate(order, 1))
-            except (TypeError, ValueError) as exc:
-                raise ValueError("invalid BM25 score") from exc
-        try:
-            return pd.DataFrame(rows, columns=["internal_query_id", "item_id", "source", "score", "rank"])
-        except (TypeError, ValueError) as exc:
-            raise ValueError("unable to build BM25 candidates") from exc
+        query_rows = list(
+            queries[[query_column, "internal_query_id"]].itertuples(
+                index=False, name=None
+            )
+        )
+        for start in range(0, len(query_rows), query_batch_size):
+            batch = query_rows[start : start + query_batch_size]
+            for value, query_id in batch:
+                tokens = tokenize(str(value) if value is not None else "")
+                order = self._retrieve_indices(tokens, min(k, len(self.item_ids)))
+                rows.extend(
+                    (
+                        str(query_id),
+                        self.item_ids[index],
+                        source,
+                        score,
+                        rank,
+                    )
+                    for rank, (index, score) in enumerate(order, 1)
+                )
+        return pd.DataFrame(
+            rows,
+            columns=["internal_query_id", "item_id", "source", "score", "rank"],
+        )
 
     def save(self, path: str | Path) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"item_ids": self.item_ids, "documents": [list(document) for document in self.documents], "k1": self.k1, "b": self.b}
-        target.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+        if target.suffix == ".npz":
+            np.savez_compressed(
+                target,
+                item_ids=np.asarray(self.item_ids, dtype=str),
+                documents=np.asarray(
+                    [" ".join(document) for document in self.documents], dtype=str
+                ),
+                k1=np.asarray(self.k1),
+                b=np.asarray(self.b),
+            )
+        else:
+            payload = {
+                "item_ids": self.item_ids,
+                "documents": [" ".join(document) for document in self.documents],
+                "k1": self.k1,
+                "b": self.b,
+                "format": "tokens-v2",
+            }
+            target.write_text(
+                json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
 
     @staticmethod
-    def load(path: str | Path) -> "BM25Index":
+    def load(path: str | Path) -> BM25Index:
+        target = Path(path)
         try:
-            payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            if target.suffix == ".npz":
+                with np.load(target, allow_pickle=False) as payload:
+                    item_ids = [str(value) for value in payload["item_ids"].tolist()]
+                    documents = [
+                        tuple(str(token) for token in str(value).split(" ") if token)
+                        for value in payload["documents"].tolist()
+                    ]
+                    k1 = float(payload["k1"])
+                    b = float(payload["b"])
+            else:
+                payload = json.loads(target.read_text(encoding="utf-8"))
+                item_ids = payload.get("item_ids")
+                documents = payload.get("documents")
+                if not isinstance(item_ids, list) or not isinstance(documents, list):
+                    raise ValueError("invalid BM25 index")
+                documents = [
+                    tuple(str(token) for token in document.split(" "))
+                    if isinstance(document, str)
+                    else tuple(str(token) for token in document)
+                    for document in documents
+                ]
+                k1 = float(payload.get("k1", 1.5))
+                b = float(payload.get("b", 0.75))
+            if len(item_ids) != len(documents):
+                raise ValueError("invalid BM25 index")
+            return BM25Index(item_ids, documents, k1, b)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("invalid BM25 index artifact") from exc
-        item_ids = payload.get("item_ids")
-        documents = payload.get("documents")
-        if not isinstance(item_ids, list) or not isinstance(documents, list) or len(item_ids) != len(documents):
-            raise ValueError("invalid BM25 index")
-        try:
-            return BM25Index([str(item_id) for item_id in item_ids], [tuple(str(token) for token in document) for document in documents], float(payload.get("k1", 1.5)), float(payload.get("b", 0.75)))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("invalid BM25 index values") from exc
 
 
 def retrieve_bm25(

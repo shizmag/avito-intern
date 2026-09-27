@@ -18,6 +18,18 @@ dependencies = [
     "transformers>=4.45.0",
 ]
 
+[project.scripts]
+avito = "avito_candidate_generation.cli:main"
+
+[tool.uv]
+package = true
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [dependency-groups]
 dev = [
     "hypothesis>=6.100.0",

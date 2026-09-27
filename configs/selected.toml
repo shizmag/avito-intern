@@ -13,17 +13,19 @@ benchmark_items = "data/benchmark_items.parquet"
 [selection]
 source = "rrf"
 retrievers = ["bm25", "dense", "two_tower"]
+category_policy = "none"
 retrieval_k = 500
 metric = "recall@50"
 fusion = "rrf"
 
 [dense]
 model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-revision = "local-cache-required"
-batch_size = 32
+model_path = "artifacts/models/paraphrase-multilingual-MiniLM-L12-v2"
+revision = "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"
+batch_size = 128
 normalize = true
-max_length = 256
-device = "cpu"
+max_length = 64
+device = "auto"
 
 [two_tower]
 dimension = 32

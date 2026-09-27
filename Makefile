@@ -1,28 +1,35 @@
 PYTHON := .venv/bin/python
+UV := uv
 export PYTHONPATH := src
 
-.PHONY: test test-ml coverage format-check lint typecheck smoke train evaluate predict ci
+.PHONY: test test-ml coverage format-check lint typecheck prepare real-validation smoke train evaluate predict verify ci
 test:
 	$(PYTHON) -m pytest -q
 
 test-ml:
 	$(PYTHON) -m pytest tests/test_dense.py tests/test_two_tower.py tests/test_two_tower_hard.py tests/test_neural_retrieval.py tests/test_fusion.py tests/test_oof_catboost.py -q
 
+prepare:
+	$(UV) run avito prepare --config configs/selected.toml
+real-validation:
+	$(UV) run avito real-validation --config configs/selected.toml
 smoke:
-	$(PYTHON) -m avito_candidate_generation.cli smoke --config configs/smoke.toml --artifact-root artifacts/smoke
+	$(UV) run avito smoke --config configs/smoke.toml --artifact-root artifacts/smoke
 
 train:
-	$(PYTHON) -m avito_candidate_generation.cli train --config configs/selected.toml
+	$(UV) run avito train
 evaluate:
-	$(PYTHON) -m avito_candidate_generation.cli evaluate --manifest artifacts/selected/manifest.json
+	$(UV) run avito evaluate
 predict:
-	$(PYTHON) -m avito_candidate_generation.cli predict --manifest artifacts/selected/manifest.json --output answer.csv
+	$(UV) run avito predict --output answer.csv
+verify:
+	$(UV) run avito verify --submission answer.csv --queries data/benchmark_queries.parquet --items data/benchmark_items.parquet
 
 coverage:
 	$(PYTHON) -m pytest --cov=src/avito_candidate_generation --cov-report=term-missing --cov-fail-under=65 -q
 
 format-check:
-	ruff format --check main.py src/avito_candidate_generation/cli.py src/avito_candidate_generation/end_to_end.py src/avito_candidate_generation/fusion/catboost.py src/avito_candidate_generation/pipeline.py src/avito_candidate_generation/retrievers/dense.py src/avito_candidate_generation/retrievers/exact_search.py src/avito_candidate_generation/retrievers/two_tower.py src/avito_candidate_generation/training/two_tower.py src/avito_candidate_generation/verify.py src/avito_candidate_generation/workflow.py tests/test_candidates_evaluation.py tests/test_end_to_end.py tests/test_neural_retrieval.py tests/test_oof_catboost.py tests/test_selected_pipeline.py tests/test_verify.py tests/test_workflow.py
+	ruff format --check main.py src/avito_candidate_generation/cli.py src/avito_candidate_generation/end_to_end.py src/avito_candidate_generation/provisioning.py src/avito_candidate_generation/validation.py src/avito_candidate_generation/fusion/catboost.py src/avito_candidate_generation/pipeline.py src/avito_candidate_generation/retrievers/dense.py src/avito_candidate_generation/retrievers/exact_search.py src/avito_candidate_generation/retrievers/two_tower.py src/avito_candidate_generation/training/two_tower.py src/avito_candidate_generation/verify.py src/avito_candidate_generation/workflow.py tests/test_candidates_evaluation.py tests/test_end_to_end.py tests/test_neural_retrieval.py tests/test_oof_catboost.py tests/test_selected_pipeline.py tests/test_verify.py tests/test_workflow.py
 
 lint:
 	ruff check src tests

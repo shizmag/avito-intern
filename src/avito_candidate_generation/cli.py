@@ -26,6 +26,15 @@ from avito_candidate_generation.splits import write_split_artifacts
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="avito-candidate-generation")
     commands = parser.add_subparsers(dest="command", required=True)
+    prepare = commands.add_parser("prepare")
+    prepare.add_argument("--config", default="configs/selected.toml")
+    prepare.add_argument("--allow-network", action="store_true")
+    real_validation = commands.add_parser("real-validation")
+    real_validation.add_argument("--config", default="configs/selected.toml")
+    real_validation.add_argument(
+        "--output", default="artifacts/metrics/real_validation.json"
+    )
+    real_validation.add_argument("--batch-size", type=int, default=256)
     validate = commands.add_parser("validate")
     validate.add_argument("--config", default="configs/base.toml")
     canonical = commands.add_parser("canonicalize")
@@ -48,21 +57,41 @@ def _build_parser() -> argparse.ArgumentParser:
     train.add_argument("--config", default="configs/selected.toml")
     train.add_argument("--artifact-root", type=Path)
     evaluate = commands.add_parser("evaluate")
-    evaluate.add_argument("--manifest", type=Path, required=True)
+    evaluate.add_argument(
+        "--manifest", type=Path, default=Path("artifacts/selected/manifest.json")
+    )
     predict = commands.add_parser("predict")
-    predict.add_argument("--manifest", type=Path, required=True)
+    predict.add_argument(
+        "--manifest", type=Path, default=Path("artifacts/selected/manifest.json")
+    )
     predict.add_argument("--output", type=Path, default=Path("answer.csv"))
     smoke = commands.add_parser("smoke")
     smoke.add_argument("--config", default="configs/smoke.toml")
     smoke.add_argument("--artifact-root", type=Path, default=Path("artifacts/smoke"))
     verify = commands.add_parser("verify")
     verify.add_argument("--root", default=".")
+    verify.add_argument(
+        "--scope", choices=("structural", "release"), default="structural"
+    )
+    verify.add_argument("--submission", type=Path)
+    verify.add_argument("--queries", type=Path)
+    verify.add_argument("--items", type=Path)
     return parser
 
 
 def main() -> None:
     args = _build_parser().parse_args()
-    if args.command == "smoke":
+    if args.command == "prepare":
+        from avito_candidate_generation.provisioning import prepare
+
+        result = prepare(args.config, allow_network=args.allow_network)
+    elif args.command == "real-validation":
+        from avito_candidate_generation.validation import run_bm25_validation
+
+        result = run_bm25_validation(
+            args.config, output=args.output, batch_size=args.batch_size
+        )
+    elif args.command == "smoke":
         workflow = cast(Any, import_module("avito_candidate_generation.workflow"))
         result = {
             "manifest": str(
@@ -133,8 +162,19 @@ def main() -> None:
                 seed=args.seed,
             ).items()
         }
+    elif args.command == "verify" and args.submission is not None:
+        from avito_candidate_generation.submission import validate_submission
+
+        if args.queries is None or args.items is None:
+            raise SystemExit("--queries and --items are required with --submission")
+        report = validate_submission(args.submission, args.queries, args.items)
+        result = {
+            "status": report.status,
+            "checks": report.checks,
+            "counts": report.counts,
+        }
     else:
-        result = run_end_to_end(args.root)
+        result = run_end_to_end(args.root, strict=args.scope == "release")
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     if args.command == "verify" and result["status"] != "PASS":
         raise SystemExit(2)
