@@ -22,3 +22,10 @@
 | Two-Tower v1 | 0.064044 | 0.114154 | 0.233249 | 0.382814 | 0.564581 | 0.775725 |
 
 BM25 fixed baseline remains in `artifacts/metrics/real_validation.json`: R@50 0.399953, R@500 0.789121. Dense is complementary in principle but union metrics are not promoted because an independent union rerun was stopped after duplicate dense encoding exceeded resource budget. No union/champion claim is made.
+
+
+## Union / fusion status
+
+- Candidate-union oracle recall: **NOT_RUN**. Dense and TT artifacts currently persist embeddings and aggregate metrics, not per-query candidate tables; no second expensive exact-search pass was promoted as partial.
+- RRF and CatBoost: **NOT_RUN** on real validation. Champion selection remains open.
+- Release remains **BLOCKED**.
