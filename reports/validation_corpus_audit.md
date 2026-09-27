@@ -128,3 +128,185 @@ Primary clean Recall is valid for item-disjoint cold-item comparison because can
 }
 ```
 
+
+## Quantitative distribution comparison
+
+Categorical fields report total variation and Jensen-Shannon divergence; numeric/text fields report quantile deltas and KS statistic.
+
+```json
+{
+  "item_microcat_id": {
+    "validation_nunique": 201,
+    "benchmark_nunique": 752,
+    "validation_missing": 0,
+    "benchmark_missing": 0,
+    "total_variation": 0.20900458327664087,
+    "js_divergence_bits": 0.053903418959817304,
+    "top_validation": {
+      "1289835": 1597,
+      "86470": 1290,
+      "86467": 938,
+      "1289833": 877,
+      "86469": 777,
+      "2059415": 754,
+      "44730": 621,
+      "2097890": 563,
+      "1178215": 555,
+      "2301617": 547
+    },
+    "top_benchmark": {
+      "86456": 6355,
+      "2301563": 4272,
+      "86467": 4064,
+      "86470": 3858,
+      "1289835": 3696,
+      "4141": 3417,
+      "2303435": 3267,
+      "86458": 3112,
+      "2097890": 2927,
+      "86469": 2895
+    }
+  },
+  "item_category_id": {
+    "validation_nunique": 3,
+    "benchmark_nunique": 47,
+    "validation_missing": 0,
+    "benchmark_missing": 0,
+    "total_variation": 0.009827519134516165,
+    "js_divergence_bits": 0.004849610676267208,
+    "top_validation": {
+      "114": 34367,
+      "27": 2,
+      "81": 1
+    },
+    "top_benchmark": {
+      "114": 187336,
+      "19": 357,
+      "112": 141,
+      "40": 122,
+      "33": 103,
+      "10": 98,
+      "20": 84,
+      "25": 82,
+      "36": 74,
+      "111": 74
+    }
+  },
+  "item_location_id": {
+    "validation_nunique": 1406,
+    "benchmark_nunique": 2877,
+    "validation_missing": 0,
+    "benchmark_missing": 0,
+    "total_variation": 0.12393819265225009,
+    "js_divergence_bits": 0.03206770648642772,
+    "top_validation": {
+      "637640": 2598,
+      "653240": 1846,
+      "633540": 848,
+      "650400": 645,
+      "654070": 637,
+      "652000": 589,
+      "641780": 576,
+      "640860": 547,
+      "646600": 495,
+      "661420": 491
+    },
+    "top_benchmark": {
+      "637640": 19543,
+      "653240": 12145,
+      "633540": 4494,
+      "650400": 3659,
+      "641780": 3178,
+      "654070": 3157,
+      "640860": 3070,
+      "652000": 3027,
+      "661420": 2726,
+      "625810": 2575
+    }
+  },
+  "item_price": {
+    "validation_count": 34370,
+    "benchmark_count": 189212,
+    "validation_missing": 0,
+    "benchmark_missing": 0,
+    "quantiles": {
+      "q01_validation": -1.0,
+      "q50_validation": 1000.0,
+      "q99_validation": 99651.89999999886,
+      "q01_benchmark": -1.0,
+      "q50_benchmark": 1000.0,
+      "q99_benchmark": 150000.0
+    },
+    "quantile_delta": {
+      "q01": 0.0,
+      "q50": 0.0,
+      "q99": -50348.10000000114
+    },
+    "ks_statistic": 0.03653276531574268
+  },
+  "item_rating": {
+    "validation_count": 32073,
+    "benchmark_count": 171581,
+    "validation_missing": 2297,
+    "benchmark_missing": 17631,
+    "quantiles": {
+      "q01_validation": 0.0,
+      "q50_validation": 5.0,
+      "q99_validation": 5.0,
+      "q01_benchmark": 0.0,
+      "q50_benchmark": 5.0,
+      "q99_benchmark": 5.0
+    },
+    "quantile_delta": {
+      "q01": 0.0,
+      "q50": 0.0,
+      "q99": 0.0
+    },
+    "ks_statistic": 0.01414673214423745
+  },
+  "item_title_raw_chars": {
+    "validation_count": 34370,
+    "benchmark_count": 189212,
+    "validation_missing": 0,
+    "benchmark_missing": 0,
+    "quantiles": {
+      "q01_validation": 7.0,
+      "q50_validation": 33.0,
+      "q99_validation": 60.30999999999767,
+      "q01_benchmark": 7.0,
+      "q50_benchmark": 35.0,
+      "q99_benchmark": 53.0
+    },
+    "quantile_delta": {
+      "q01": 0.0,
+      "q50": -2.0,
+      "q99": 7.309999999997672
+    },
+    "ks_statistic": 0.03241792733566162
+  },
+  "item_description_raw_chars": {
+    "validation_count": 34370,
+    "benchmark_count": 189212,
+    "validation_missing": 0,
+    "benchmark_missing": 0,
+    "quantiles": {
+      "q01_validation": 24.0,
+      "q50_validation": 869.0,
+      "q99_validation": 5496.0,
+      "q01_benchmark": 27.0,
+      "q50_benchmark": 1054.0,
+      "q99_benchmark": 5541.0
+    },
+    "quantile_delta": {
+      "q01": -3.0,
+      "q50": -185.0,
+      "q99": -45.0
+    },
+    "ks_statistic": 0.06918448988297865
+  }
+}
+```
+
+## Coldness caveat
+
+Validation items are cold relative to `train_items` (zero overlap), but not unseen in raw source: all validation items originate from observed raw interactions. Validation and benchmark item IDs also overlap (1,795 exact IDs). This is recorded as caveat, not hidden.
