@@ -121,6 +121,8 @@ def _compose_query_text(frame: pd.DataFrame) -> pd.DataFrame:
         result = pd.DataFrame(
             {"internal_query_id": work["internal_query_id"].astype(str), "text": text}
         )
+        if "search_category" in work:
+            result["search_category"] = work["search_category"].tolist()
     result["internal_query_id"] = result["internal_query_id"].astype(str)
     result["text"] = result["text"].fillna("").astype(str)
     if "search_category" in result:
@@ -153,6 +155,8 @@ def _compose_item_text(frame: pd.DataFrame) -> pd.DataFrame:
             raise ValueError("item table has no text fields")
         text = work[columns].fillna("").astype(str).agg(" ".join, axis=1)
         result = pd.DataFrame({"item_id": work["item_id"].astype(str), "text": text})
+        if "search_category" in work:
+            result["search_category"] = work["search_category"].tolist()
     result["item_id"] = result["item_id"].astype(str)
     result["text"] = result["text"].fillna("").astype(str)
     if "search_category" in result:

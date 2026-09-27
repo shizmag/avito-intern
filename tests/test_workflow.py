@@ -6,6 +6,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from avito_candidate_generation.workflow import (
+    _compose_item_text,
+    _compose_query_text,
+)
+
 
 class FixtureDenseEncoder:
     def encode(self, texts, *, batch_size: int) -> np.ndarray:
@@ -78,6 +83,21 @@ benchmark_queries = "data/benchmark_queries.parquet"
 benchmark_items = "data/benchmark_items.parquet"
 """)
     return config
+
+
+def test_composed_text_preserves_category_metadata() -> None:
+    query = pd.DataFrame(
+        {
+            "internal_query_id": ["q"],
+            "search_query": ["phone"],
+            "search_category": [123],
+        }
+    )
+    item = pd.DataFrame(
+        {"item_id": ["i"], "item_title_raw": ["phone"], "search_category": [123]}
+    )
+    assert _compose_query_text(query).loc[0, "search_category"] == "123"
+    assert _compose_item_text(item).loc[0, "search_category"] == "123"
 
 
 def test_selected_workflow_smoke_is_reproducible(tmp_path: Path) -> None:
