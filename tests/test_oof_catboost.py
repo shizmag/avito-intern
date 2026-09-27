@@ -1,11 +1,12 @@
 import pandas as pd
-from avito_candidate_generation.oof import build_oof_table, verify_oof
+
 from avito_candidate_generation.fusion.catboost import (
     load_selector,
     save_selector,
     score_selector,
     train_selector,
 )
+from avito_candidate_generation.oof import build_oof_table, verify_oof
 
 
 def test_oof_verify_and_selector(tmp_path):
@@ -23,4 +24,10 @@ def test_oof_verify_and_selector(tmp_path):
     assert verify_oof(table, folds=3)["status"]
     model = train_selector(table)
     path = save_selector(model, tmp_path / "model.json")
-    assert score_selector(table, load_selector(path)).notna().all()
+    loaded = load_selector(path)
+    assert model["algorithm"] == "CatBoostClassifier"
+    assert (tmp_path / "model.cbm").is_file()
+    assert score_selector(table, loaded).notna().all()
+    assert (
+        score_selector(table, model).tolist() == score_selector(table, loaded).tolist()
+    )
