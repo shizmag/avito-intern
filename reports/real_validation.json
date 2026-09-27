@@ -1,22 +1,52 @@
 {
-  "schema_version": 1,
-  "status": "PASS",
-  "method": "bm25",
+  "schema_version": 2,
+  "status": "BLOCKED",
   "split": "cold-item-validation",
-  "category_policy": "none",
-  "n_queries": 43413,
-  "n_items": 34370,
-  "n_relevant": 46360,
-  "candidate_k": 500,
-  "batch_size": 128,
-  "metrics": {
-    "recall@10": 0.18262415965062628,
-    "recall@20": 0.26274057998195943,
-    "recall@50": 0.3999534101496648,
-    "recall@100": 0.5248241741417745,
-    "recall@200": 0.6540667841770047,
-    "recall@500": 0.7891208824575562
+  "protocol": "primary clean validation",
+  "corpus": {
+    "n_queries": 43413,
+    "n_items": 34370,
+    "n_relevant": 46360,
+    "candidate_k": 500,
+    "category_policy": "hard",
+    "location_policy": "not_hard_filtered"
   },
-  "config_hash": "51944f77154268142e4432346471c53b6a7e439f167d39d612feb2e44b3af861",
-  "reason": "BM25-only real validation; neural ablations not run by this command"
+  "methods": {
+    "bm25": {
+      "status": "PASS",
+      "metrics": {
+        "recall@10": 0.18262415965062628,
+        "recall@20": 0.26274057998195943,
+        "recall@50": 0.3999534101496648,
+        "recall@100": 0.5248241741417745,
+        "recall@200": 0.6540667841770047,
+        "recall@500": 0.7891208824575562
+      },
+      "source": "artifacts/metrics/real_validation.json",
+      "note": "Fixed baseline was originally measured with category_policy=none; category ablation hard is +0.000046 Recall@50."
+    },
+    "dense": {
+      "status": "PASS",
+      "metrics_source": "artifacts/real_validation/dense_validation.json"
+    },
+    "two_tower_v1": {
+      "status": "PASS",
+      "metrics_source": "artifacts/real_validation/two_tower_v1_validation.json"
+    },
+    "two_tower_v2_hard_negative": {
+      "status": "NOT_RUN",
+      "metrics_source": "artifacts/real_validation/two_tower_v2_validation.json"
+    }
+  },
+  "candidate_unions": {
+    "status": "NOT_RUN",
+    "source": "artifacts/real_validation/union_validation.json"
+  },
+  "fusion": {
+    "rrf": "NOT_RUN",
+    "catboost": "NOT_RUN"
+  },
+  "champion": null,
+  "release_status": "BLOCKED",
+  "reason": "Real dense and Two-Tower v1 are measured. Hard-negative v2, candidate unions, fusion, champion selection, full-data training, and answer.csv remain incomplete."
 }
