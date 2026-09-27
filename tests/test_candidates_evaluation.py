@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 import pytest
-from hypothesis import given
-from hypothesis import strategies as st
+from hypothesis import given  # type: ignore[import-not-found]
+from hypothesis import strategies as st  # type: ignore[import-not-found]
 
 from avito_candidate_generation.candidates import (
     CandidateError,
