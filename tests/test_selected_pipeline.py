@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
+from importlib import import_module
+from typing import Any, cast
 
 import pytest
 
-from avito_candidate_generation.cli import (
-    main as cli_main,  # type: ignore[import-not-found]
-)
 from avito_candidate_generation.pipeline import FinalPipeline, SelectedManifest
 
 
@@ -75,6 +74,7 @@ def test_selected_candidate_union_includes_two_tower_source() -> None:
 def test_cli_verify_dispatch(capsys) -> None:
     import sys
 
+    cli_main = cast(Any, import_module("avito_candidate_generation.cli").main)
     previous = sys.argv
     try:
         sys.argv = ["avito-candidate-generation", "verify", "--root", "."]
