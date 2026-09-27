@@ -105,7 +105,10 @@ def _compose_query_text(frame: pd.DataFrame) -> pd.DataFrame:
             raise ValueError("query table requires internal_query_id or query_id")
         work["internal_query_id"] = work["query_id"].astype(str)
     if "text" in work:
-        result = _frame(work[["internal_query_id", "text"]].copy())
+        keep = ["internal_query_id", "text"]
+        if "search_category" in work:
+            keep.append("search_category")
+        result = _frame(work[keep].copy())
     else:
         columns = [
             column
@@ -120,6 +123,8 @@ def _compose_query_text(frame: pd.DataFrame) -> pd.DataFrame:
         )
     result["internal_query_id"] = result["internal_query_id"].astype(str)
     result["text"] = result["text"].fillna("").astype(str)
+    if "search_category" in result:
+        result["search_category"] = result["search_category"].fillna("").astype(str)
     if "query_id" in work:
         result["query_id"] = work["query_id"].astype(str).tolist()
     return _frame(result.reset_index(drop=True))
@@ -130,7 +135,10 @@ def _compose_item_text(frame: pd.DataFrame) -> pd.DataFrame:
     if "item_id" not in work:
         raise ValueError("item table requires item_id")
     if "text" in work:
-        result = _frame(work[["item_id", "text"]].copy())
+        keep = ["item_id", "text"]
+        if "search_category" in work:
+            keep.append("search_category")
+        result = _frame(work[keep].copy())
     else:
         columns = [
             column
@@ -147,6 +155,8 @@ def _compose_item_text(frame: pd.DataFrame) -> pd.DataFrame:
         result = pd.DataFrame({"item_id": work["item_id"].astype(str), "text": text})
     result["item_id"] = result["item_id"].astype(str)
     result["text"] = result["text"].fillna("").astype(str)
+    if "search_category" in result:
+        result["search_category"] = result["search_category"].fillna("").astype(str)
     return _frame(result.reset_index(drop=True))
 
 
@@ -468,8 +478,9 @@ def _retrieve_sources(
     k: int,
     *,
     encoder_batch_size: int = 32,
+    category_policy: str = "none",
 ) -> list[pd.DataFrame]:
-    bm25 = retrieve_bm25(queries, items, k=k)
+    bm25 = retrieve_bm25(queries, items, k=k, category_policy=category_policy)
     dense = exact_top_k(
         encode_texts(encoder, queries["text"].tolist(), batch_size=encoder_batch_size),
         generic.embeddings,
@@ -624,6 +635,7 @@ def train_selected(
         tower_v1_train,
         k,
         encoder_batch_size=encoder_batch_size,
+        category_policy=str(selection.get("category_policy", "none")),
     )
     positives = cast(pd.DataFrame, data.train_pairs[["internal_query_id", "item_id"]])
     try:
@@ -700,6 +712,7 @@ def train_selected(
         tower_v2_validation,
         k,
         encoder_batch_size=encoder_batch_size,
+        category_policy=str(selection.get("category_policy", "none")),
     )
     candidate_dir = root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)

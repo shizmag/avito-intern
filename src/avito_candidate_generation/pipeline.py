@@ -152,6 +152,7 @@ def build_selected_candidates(
     two_tower: TwoTowerModel | None = None,
     retrieval_k: int = 500,
     rrf_k: int = 60,
+    category_policy: str = "none",
 ) -> pd.DataFrame:
     """Build selected BM25+dense union and RRF scores; no fallback algorithms."""
     required_query = {"internal_query_id", "text"}
@@ -162,7 +163,7 @@ def build_selected_candidates(
         raise ValueError(
             "selected retrieval requires internal_query_id/text and item_id/text"
         )
-    bm25 = retrieve_bm25(queries, items, k=retrieval_k)
+    bm25 = retrieve_bm25(queries, items, k=retrieval_k, category_policy=category_policy)
     sources = [bm25]
     if dense_encoder is not None:
         if item_embeddings is None:

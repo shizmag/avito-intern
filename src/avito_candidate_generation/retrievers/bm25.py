@@ -233,5 +233,55 @@ def retrieve_bm25(
     query_column: str = "text",
     k: int = 50,
     source: str = "bm25",
+    category_policy: str = "none",
+    query_category_column: str = "search_category",
+    item_category_column: str = "search_category",
 ) -> pd.DataFrame:
-    return BM25Index.fit(items, text_column).retrieve(queries, query_column, k, source)
+    if category_policy not in {"none", "hard", "fallback"}:
+        raise ValueError("category_policy must be one of none, hard, fallback")
+    index = BM25Index.fit(items, text_column)
+    if category_policy == "none":
+        return index.retrieve(queries, query_column, k, source)
+    if query_category_column not in queries or item_category_column not in items:
+        raise ValueError("category policy requires category columns on both tables")
+    category_indices: dict[str, list[int]] = {}
+    for index_number, value in enumerate(items[item_category_column].tolist()):
+        category = "" if pd.isna(value) else str(value)
+        if category and category != "nan":
+            category_indices.setdefault(category, []).append(index_number)
+    rows: list[tuple[str, str, str, float, int]] = []
+    for query_text, query_id, value in queries[
+        [query_column, "internal_query_id", query_category_column]
+    ].itertuples(index=False, name=None):
+        category = "" if pd.isna(value) else str(value)
+        indices = (
+            category_indices.get(category, []) if category and category != "nan" else []
+        )
+        tokens = tokenize(str(query_text) if query_text is not None else "")
+        ranked = [
+            (index_number, index.score(tokens, index.documents[index_number]))
+            for index_number in indices
+        ]
+        ranked = [
+            (index_number, score) for index_number, score in ranked if score > 0.0
+        ]
+        ranked.sort(key=lambda pair: (-pair[1], index.item_ids[pair[0]]))
+        if not ranked and category_policy == "fallback":
+            ranked = index._retrieve_indices(tokens, min(k, len(index.item_ids)))
+        try:
+            rows.extend(
+                (
+                    str(query_id),
+                    index.item_ids[index_number],
+                    source,
+                    float(score),
+                    rank,
+                )
+                for rank, (index_number, score) in enumerate(ranked[:k], 1)
+            )
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError("invalid category-filtered BM25 scores") from exc
+    return pd.DataFrame(
+        rows,
+        columns=["internal_query_id", "item_id", "source", "score", "rank"],
+    )

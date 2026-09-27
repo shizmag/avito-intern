@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "status": "PASS",
+  "protocol": {
+    "primary": "clean cold-item validation",
+    "stress": "not run; no known-negative distractor contract",
+    "selection_metric": "primary clean validation Recall@50"
+  },
+  "provenance": {
+    "prepared_manifest": "/Users/vladimirkasterin/work/avito-test/artifacts/selected/prepared/manifest.json",
+    "split_algorithm": "workflow-prepared-v1; deterministic SHA-256(seed:item_id), seed=42, proportions=(0.8,0.1,0.1)",
+    "validation_membership": "items assigned validation by deterministic item hash and retaining items with observed validation interactions",
+    "query_membership": "queries retaining at least one observed interaction to a validation item",
+    "negative_semantics": "non-positive pairs are unobserved, not guaranteed negatives; train items are not appended as primary distractors"
+  },
+  "inputs": {
+    "raw_train": {
+      "path": "/Users/vladimirkasterin/work/avito-test/data/train.parquet",
+      "sha256": "e150ab7a5c98769f643b95ee3a02dc0f664b647facd69a7d280ec6d48ca554a7",
+      "rows": 497673
+    },
+    "benchmark_items": {
+      "path": "/Users/vladimirkasterin/work/avito-test/data/benchmark_items.parquet",
+      "sha256": "193b3a3961464620cbf8d8797152b7f90cae1826ca749fb7817a210984a09899",
+      "rows": 189212
+    },
+    "benchmark_queries": {
+      "path": "/Users/vladimirkasterin/work/avito-test/data/benchmark_queries.parquet",
+      "sha256": "e49de4fb76f03979a4af96034817767d39ae5de9f94e254fed028243188dda06",
+      "rows": 2452
+    },
+    "train_items": {
+      "path": "/Users/vladimirkasterin/work/avito-test/artifacts/selected/prepared/train_items.parquet",
+      "sha256": "ee8189991b147712edc08fa1e6fbccc4da6a83dbfadb7d9d959cb255d957eabf",
+      "rows": 275899
+    },
+    "validation_items": {
+      "path": "/Users/vladimirkasterin/work/avito-test/artifacts/selected/prepared/validation_items.parquet",
+      "sha256": "d24646c7e5555f5e1f44a6ab5eb9e8f88b0d15cc592e0f2b9d797be5188eaf8f",
+      "rows": 34370
+    },
+    "validation_queries": {
+      "path": "/Users/vladimirkasterin/work/avito-test/artifacts/selected/prepared/validation_queries.parquet",
+      "sha256": "de0910906b0a39dcd1748d15730d00d7ffb1994d50eec3f9e2c123800b3f4907",
+      "rows": 43413
+    },
+    "ground_truth": {
+      "path": "/Users/vladimirkasterin/work/avito-test/artifacts/selected/prepared/validation_ground_truth.parquet",
+      "sha256": "bb302b37c9c73a9434c12eb98d324e7c32e16c90bf25cd660b69f9d20bf5e332",
+      "rows": 46360
+    },
+    "train_pairs": {
+      "path": "/Users/vladimirkasterin/work/avito-test/artifacts/selected/prepared/train_pairs.parquet",
+      "sha256": "805c70cd8511d5e2a66cda690332277903c5df68a603bd777c0b9843f7c20023",
+      "rows": 374020
+    }
+  },
+  "counts": {
+    "raw_train": {
+      "rows": 497673,
+      "columns": 19
+    },
+    "benchmark_items": {
+      "rows": 189212,
+      "columns": 14
+    },
+    "benchmark_queries": {
+      "rows": 2452,
+      "columns": 6
+    },
+    "train_items": {
+      "rows": 275899,
+      "columns": 20
+    },
+    "validation_items": {
+      "rows": 34370,
+      "columns": 20
+    },
+    "validation_queries": {
+      "rows": 43413,
+      "columns": 6
+    },
+    "ground_truth": {
+      "rows": 46360,
+      "columns": 2
+    },
+    "train_pairs": {
+      "rows": 374020,
+      "columns": 3
+    }
+  },
+  "overlap": {
+    "validation_train_items": 0,
+    "validation_benchmark_items": 1795,
+    "validation_raw_train_items": 34370,
+    "train_benchmark_items": 14510,
+    "validation_unique_items": 34370,
+    "train_unique_items": 275899,
+    "benchmark_unique_items": 189212,
+    "raw_train_unique_items": 344825,
+    "ground_truth_unique_items": 34370,
+    "ground_truth_queries": 43413,
+    "ground_truth_pairs": 46360
+  },
+  "distributions": {
+    "validation_items": {
+      "search_category": {
+        "missing": 0,
+        "nunique": 2,
+        "top5": {
+          "114": 34368,
+          "0": 2
+        }
+      },
+      "search_location_id": {
+        "missing": 0,
+        "nunique": 1430,
+        "top5": {
+          "637640": 2126,
+          "653240": 1541,
+          "107620": 820,
+          "633540": 749,
+          "650400": 612
+        }
+      },
+      "item_price": {
+        "missing": 0,
+        "quantiles": {
+          "0.01": -1.0,
+          "0.5": 1000.0,
+          "0.99": 99651.89999999886
+        }
+      },
+      "item_rating": {
+        "missing": 2297,
+        "quantiles": {
+          "0.01": 0.0,
+          "0.5": 5.0,
+          "0.99": 5.0
+        }
+      },
+      "item_title_raw_chars": {
+        "quantiles": {
+          "0.01": 7.0,
+          "0.5": 33.0,
+          "0.99": 60.30999999999767
+        }
+      },
+      "item_description_raw_chars": {
+        "quantiles": {
+          "0.01": 24.0,
+          "0.5": 869.0,
+          "0.99": 5496.0
+        }
+      }
+    },
+    "benchmark_items": {
+      "item_price": {
+        "missing": 0,
+        "quantiles": {
+          "0.01": -1.0,
+          "0.5": 1000.0,
+          "0.99": 150000.0
+        }
+      },
+      "item_rating": {
+        "missing": 17631,
+        "quantiles": {
+          "0.01": 0.0,
+          "0.5": 5.0,
+          "0.99": 5.0
+        }
+      },
+      "item_title_raw_chars": {
+        "quantiles": {
+          "0.01": 7.0,
+          "0.5": 35.0,
+          "0.99": 53.0
+        }
+      },
+      "item_description_raw_chars": {
+        "quantiles": {
+          "0.01": 27.0,
+          "0.5": 1054.0,
+          "0.99": 5541.0
+        }
+      }
+    }
+  },
+  "quality_checks": {
+    "all_validation_items_cold_vs_train": true,
+    "validation_items_are_ground_truth_items_subset": true,
+    "benchmark_is_larger_than_validation": true,
+    "validation_to_benchmark_item_ratio": 0.1816480984292751,
+    "unknown_negative_warning": true
+  },
+  "git_commit": "7d5d6480bf87bea04499f9368377dde8d0025599"
+}

@@ -61,6 +61,45 @@ def test_exact_search_and_bm25():
     assert result.iloc[0].item_id == "a"
 
 
+def test_bm25_category_policy_hard_and_fallback() -> None:
+    items = pd.DataFrame(
+        {
+            "item_id": ["a", "b", "c"],
+            "text": ["red phone", "red car", "blue phone"],
+            "search_category": ["phone", "car", "phone"],
+        }
+    )
+    queries = pd.DataFrame(
+        {
+            "internal_query_id": ["q1", "q2"],
+            "text": ["phone", "red"],
+            "search_category": ["phone", "missing"],
+        }
+    )
+    hard = retrieve_bm25(queries, items, k=3, category_policy="hard")
+    assert set(hard.loc[hard.internal_query_id == "q1", "item_id"]) == {"a", "c"}
+    assert hard.loc[hard.internal_query_id == "q2"].empty
+    fallback = retrieve_bm25(queries, items, k=3, category_policy="fallback")
+    assert set(fallback.loc[fallback.internal_query_id == "q1", "item_id"]) == {
+        "a",
+        "c",
+    }
+    assert set(fallback.loc[fallback.internal_query_id == "q2", "item_id"]) == {
+        "a",
+        "b",
+        "c",
+    }
+
+
+def test_bm25_category_policy_rejects_unknown_policy() -> None:
+    items = pd.DataFrame({"item_id": ["a"], "text": ["x"], "search_category": ["c"]})
+    queries = pd.DataFrame(
+        {"internal_query_id": ["q"], "text": ["x"], "search_category": ["c"]}
+    )
+    with pytest.raises(ValueError, match="category_policy"):
+        retrieve_bm25(queries, items, category_policy="location")
+
+
 @given(
     query_count=st.integers(min_value=1, max_value=4),
     item_count=st.integers(min_value=1, max_value=8),

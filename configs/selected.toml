@@ -13,7 +13,7 @@ benchmark_items = "data/benchmark_items.parquet"
 [selection]
 source = "rrf"
 retrievers = ["bm25", "dense", "two_tower"]
-category_policy = "none"
+category_policy = "hard"
 retrieval_k = 500
 metric = "recall@50"
 fusion = "rrf"
