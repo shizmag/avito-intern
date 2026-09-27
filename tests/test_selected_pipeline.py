@@ -4,6 +4,9 @@ import json
 
 import pytest
 
+from avito_candidate_generation.cli import (
+    main as cli_main,  # type: ignore[import-not-found]
+)
 from avito_candidate_generation.pipeline import FinalPipeline, SelectedManifest
 
 
@@ -67,3 +70,16 @@ def test_selected_candidate_union_includes_two_tower_source() -> None:
     )
     assert set(result["source"]) == {"rrf"}
     assert set(result["retriever_count"]) == {3}
+
+
+def test_cli_verify_dispatch(capsys) -> None:
+    import sys
+
+    previous = sys.argv
+    try:
+        sys.argv = ["avito-candidate-generation", "verify", "--root", "."]
+        with pytest.raises(SystemExit, match="2"):
+            cli_main()
+    finally:
+        sys.argv = previous
+    assert '"status": "BLOCKED"' in capsys.readouterr().out
