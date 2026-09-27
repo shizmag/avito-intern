@@ -14,6 +14,7 @@ from .fusion.rrf import reciprocal_rank_fusion
 from .retrievers.bm25 import retrieve_bm25
 from .retrievers.dense import EmbeddingArtifact, TextEncoder, encode_texts
 from .retrievers.exact_search import exact_top_k
+from .retrievers.two_tower import TwoTowerModel
 
 _REQUIRED_MANIFEST = {
     "schema_version",
@@ -148,6 +149,7 @@ def build_selected_candidates(
     *,
     dense_encoder: TextEncoder | None = None,
     item_embeddings: EmbeddingArtifact | None = None,
+    two_tower: TwoTowerModel | None = None,
     retrieval_k: int = 500,
     rrf_k: int = 60,
 ) -> pd.DataFrame:
@@ -178,6 +180,22 @@ def build_selected_candidates(
             query_ids=queries["internal_query_id"].astype(str).tolist(),
         )
         sources.append(dense)
+    if two_tower is not None:
+        query_embeddings = two_tower.encode_queries(
+            queries["text"].astype(str).tolist()
+        )
+        item_embeddings_tower = two_tower.encode_items(
+            items["text"].astype(str).tolist()
+        )
+        two_tower_candidates = exact_top_k(
+            query_embeddings,
+            item_embeddings_tower,
+            items["item_id"].astype(str).tolist(),
+            k=retrieval_k,
+            query_ids=queries["internal_query_id"].astype(str).tolist(),
+            source="two_tower",
+        )
+        sources.append(two_tower_candidates)
     candidates = pd.concat(sources, ignore_index=True)
     validate_candidates(candidates)
     return reciprocal_rank_fusion(candidates, rrf_k=rrf_k, limit=retrieval_k)

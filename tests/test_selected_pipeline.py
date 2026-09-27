@@ -36,3 +36,34 @@ def test_selected_manifest_rejects_ambiguous_bundle(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="invalid selected pipeline manifest"):
         FinalPipeline.load(tmp_path)
+
+
+def test_selected_candidate_union_includes_two_tower_source() -> None:
+    from collections.abc import Sequence
+
+    import numpy as np
+    import pandas as pd
+
+    from avito_candidate_generation.pipeline import build_selected_candidates
+    from avito_candidate_generation.retrievers.dense import build_embedding_artifact
+    from avito_candidate_generation.retrievers.two_tower import TwoTowerModel
+
+    class Encoder:
+        def encode(self, texts: Sequence[str], *, batch_size: int) -> np.ndarray:
+            return np.asarray(
+                [[float(len(text)), 1.0] for text in texts], dtype=np.float32
+            )
+
+    queries = pd.DataFrame({"internal_query_id": ["q"], "text": ["red"]})
+    items = pd.DataFrame({"item_id": ["a", "b"], "text": ["red", "blue"]})
+    artifact = build_embedding_artifact(Encoder(), ["a", "b"], ["red", "blue"])
+    result = build_selected_candidates(
+        queries,
+        items,
+        dense_encoder=Encoder(),
+        item_embeddings=artifact,
+        two_tower=TwoTowerModel(dimension=8, vocab_size=257),
+        retrieval_k=2,
+    )
+    assert set(result["source"]) == {"rrf"}
+    assert set(result["retriever_count"]) == {3}

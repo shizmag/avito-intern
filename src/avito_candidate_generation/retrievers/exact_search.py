@@ -13,6 +13,7 @@ def exact_top_k(
     *,
     k: int = 50,
     query_ids: list[str] | None = None,
+    source: str = "dense",
 ) -> pd.DataFrame:
     if (
         query_embeddings.ndim != 2
@@ -29,18 +30,28 @@ def exact_top_k(
         if query_ids is not None
         else [str(i) for i in range(len(query_embeddings))]
     )
+    if len(ids) != len(query_embeddings):
+        raise ValueError("query_ids length mismatch")
+    if not source:
+        raise ValueError("source must be non-empty")
     rows: list[tuple[str, str, float, int]] = []
     for qi, vector in enumerate(query_embeddings):
         scores = item_embeddings @ vector
-        order = sorted(
-            range(len(item_ids)), key=lambda i: (-float(scores[i]), item_ids[i])
-        )[:k]
-        rows.extend(
-            (ids[qi], item_ids[i], float(scores[i]), rank)
-            for rank, i in enumerate(order, 1)
-        )
+        try:
+            order = sorted(
+                range(len(item_ids)),
+                key=lambda i: (-float(scores[i]), item_ids[i]),
+            )[:k]
+            rows.extend(
+                (ids[qi], item_ids[i], float(scores[i]), rank)
+                for rank, i in enumerate(order, 1)
+            )
+        except (IndexError, TypeError, ValueError) as exc:
+            raise ValueError("invalid dense similarity scores") from exc
     result = pd.DataFrame(
         rows, columns=["internal_query_id", "item_id", "score", "rank"]
     )
-    result["source"] = "dense"
-    return pd.DataFrame(result[["internal_query_id", "item_id", "source", "score", "rank"]])
+    result["source"] = source
+    return pd.DataFrame(
+        result[["internal_query_id", "item_id", "source", "score", "rank"]]
+    )
