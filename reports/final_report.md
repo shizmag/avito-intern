@@ -31,3 +31,11 @@ Status: **BLOCKED**.
 Candidate union oracle recall, RRF, CatBoost comparison, champion selection, final full-data training, benchmark inference, answer.csv, and strict release verification remain incomplete. No champion is selected.
 
 Machine-readable consolidated status: `reports/real_validation.json`.
+
+
+## CatBoost
+
+- Status: **NOT_RUN**.
+- Reason: no real OOF candidate-feature artifact is available. Training directly on validation union would leak validation retrieval features.
+- Artifact: `artifacts/real_validation/catboost_validation.json`.
+- RRF remains measured baseline: R@50 `0.412826`, R@500 `0.853780`.

@@ -225,5 +225,14 @@
       },
       "interpretation": "retriever union adds modest pool coverage over BM25, while top-50 fusion remains far below union top-500 coverage; retrieval and selection both matter, selection is primary bottleneck"
     }
-  }
+  },
+  "remaining_gates": [
+    "two_tower_v2_hard_negative",
+    "catboost_oof_comparison",
+    "champion_selection",
+    "selected_manifest",
+    "full_data_training",
+    "answer_csv",
+    "strict_release_verifier"
+  ]
 }
