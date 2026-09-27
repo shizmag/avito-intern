@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "status": "BLOCKED",
   "split": "cold-item-validation",
   "protocol": "primary clean validation",
@@ -12,7 +12,7 @@
     "location_policy": "not_hard_filtered"
   },
   "methods": {
-    "bm25": {
+    "bm25_global_fixed": {
       "status": "PASS",
       "metrics": {
         "recall@10": 0.18262415965062628,
@@ -22,31 +22,208 @@
         "recall@200": 0.6540667841770047,
         "recall@500": 0.7891208824575562
       },
-      "source": "artifacts/metrics/real_validation.json",
-      "note": "Fixed baseline was originally measured with category_policy=none; category ablation hard is +0.000046 Recall@50."
+      "source": "artifacts/metrics/real_validation.json"
+    },
+    "bm25_hard": {
+      "status": "PASS",
+      "metrics": {
+        "recall@10": 0.18267022880042022,
+        "recall@20": 0.26278664913175315,
+        "recall@50": 0.39999947929945856,
+        "recall@100": 0.5248702432915687,
+        "recall@200": 0.6541128533267985,
+        "recall@500": 0.7891669516073496
+      },
+      "source": "reports/category_ablation.json"
     },
     "dense": {
       "status": "PASS",
-      "metrics_source": "artifacts/real_validation/dense_validation.json"
+      "metrics": {
+        "recall@10": 0.06153292649042769,
+        "recall@20": 0.09557774341997965,
+        "recall@50": 0.16348515043491194,
+        "recall@100": 0.2308999198934244,
+        "recall@200": 0.31075166652873815,
+        "recall@500": 0.43745120394799053
+      },
+      "source": "artifacts/real_validation/dense_validation.json"
     },
     "two_tower_v1": {
       "status": "PASS",
-      "metrics_source": "artifacts/real_validation/two_tower_v1_validation.json"
+      "metrics": {
+        "recall@10": 0.06404412406416413,
+        "recall@20": 0.114154198087582,
+        "recall@50": 0.23324873068152752,
+        "recall@100": 0.3828136708690918,
+        "recall@200": 0.5645805460417448,
+        "recall@500": 0.7757252251430267
+      },
+      "source": "artifacts/real_validation/two_tower_v1_validation.json"
     },
     "two_tower_v2_hard_negative": {
       "status": "NOT_RUN",
-      "metrics_source": "artifacts/real_validation/two_tower_v2_validation.json"
+      "metrics": null,
+      "source": "artifacts/real_validation/two_tower_v2_validation.json"
     }
   },
   "candidate_unions": {
-    "status": "NOT_RUN",
-    "source": "artifacts/real_validation/union_validation.json"
+    "status": "PASS",
+    "source": "artifacts/real_validation/union_validation.json",
+    "metrics": {
+      "bm25": {
+        "recall@10": 0.18267022880042014,
+        "recall@20": 0.26278664913175326,
+        "recall@50": 0.39999947929945867,
+        "recall@100": 0.5248702432915685,
+        "recall@200": 0.6541128533267986,
+        "recall@300": 0.7209627858736423,
+        "recall@500": 0.7891669516073501
+      },
+      "dense": {
+        "recall@10": 0.06153292649042769,
+        "recall@20": 0.09557774341997965,
+        "recall@50": 0.16348515043491196,
+        "recall@100": 0.2308999198934244,
+        "recall@200": 0.31075166652873815,
+        "recall@300": 0.36477724901296216,
+        "recall@500": 0.43745120394799053
+      },
+      "two_tower_v1": {
+        "recall@10": 0.06404412406416413,
+        "recall@20": 0.114154198087582,
+        "recall@50": 0.23324873068152752,
+        "recall@100": 0.3828136708690918,
+        "recall@200": 0.5645805460417448,
+        "recall@300": 0.6663042264261951,
+        "recall@500": 0.7757252251430267
+      },
+      "union_bm25_dense": {
+        "recall@10": 0.18264719422552322,
+        "recall@20": 0.2627636145568563,
+        "recall@50": 0.39997644472456173,
+        "recall@100": 0.5255612805384761,
+        "recall@200": 0.6566812084278052,
+        "recall@300": 0.7253508723915055,
+        "recall@500": 0.7963486004930969
+      },
+      "union_bm25_tt": {
+        "recall@10": 0.18264719422552322,
+        "recall@20": 0.2627636145568563,
+        "recall@50": 0.39997644472456173,
+        "recall@100": 0.5257225225627545,
+        "recall@200": 0.6604665569025324,
+        "recall@300": 0.7327948791790269,
+        "recall@500": 0.8082319900248868
+      },
+      "union_dense_tt": {
+        "recall@10": 0.06586385548102085,
+        "recall@20": 0.11606030916030215,
+        "recall@50": 0.23514972295982609,
+        "recall@100": 0.38339452606607594,
+        "recall@200": 0.5605946687955539,
+        "recall@300": 0.6606533333245385,
+        "recall@500": 0.7684329906101037
+      },
+      "union_all": {
+        "recall@10": 0.18264719422552322,
+        "recall@20": 0.2627636145568563,
+        "recall@50": 0.39997644472456173,
+        "recall@100": 0.5258146608623422,
+        "recall@200": 0.66070841993895,
+        "recall@300": 0.7331749496648261,
+        "recall@500": 0.8088999926968974
+      },
+      "rrf_v1": {
+        "recall@10": 0.161703017419623,
+        "recall@20": 0.25120719466652724,
+        "recall@50": 0.41282618363677037,
+        "recall@100": 0.5536849088815088,
+        "recall@200": 0.7007237915226308,
+        "recall@300": 0.7766741104088217,
+        "recall@500": 0.8537802225211529
+      }
+    }
   },
   "fusion": {
-    "rrf": "NOT_RUN",
-    "catboost": "NOT_RUN"
+    "rrf_v1": {
+      "status": "PASS",
+      "metrics": {
+        "recall@10": 0.161703017419623,
+        "recall@20": 0.25120719466652724,
+        "recall@50": 0.41282618363677037,
+        "recall@100": 0.5536849088815088,
+        "recall@200": 0.7007237915226308,
+        "recall@300": 0.7766741104088217,
+        "recall@500": 0.8537802225211529
+      },
+      "source": "artifacts/real_validation/union_validation.json"
+    },
+    "catboost": {
+      "status": "NOT_RUN",
+      "metrics": null
+    }
   },
   "champion": null,
   "release_status": "BLOCKED",
-  "reason": "Real dense and Two-Tower v1 are measured. Hard-negative v2, candidate unions, fusion, champion selection, full-data training, and answer.csv remain incomplete."
+  "reason": "Real dense, TT v1, candidate unions, and RRF are measured. TT v2 hard-negative, CatBoost comparison, champion selection, full-data training, answer.csv, and strict release verification remain incomplete.",
+  "diagnostics": {
+    "resource": {
+      "device": "cpu",
+      "runtime_sec": 762.1644965830492,
+      "peak_rss_mb": 4470.6875,
+      "exact_search": "chunked; incremental aggregation; no full candidate table"
+    },
+    "union_diagnostics": {
+      "bm25": {
+        "rows": 21705504,
+        "unique_pairs": 21705504,
+        "mean_candidate_rows_per_query": 499.9770575634027
+      },
+      "dense": {
+        "rows": 21706500,
+        "unique_pairs": 21706500,
+        "mean_candidate_rows_per_query": 500.0
+      },
+      "two_tower_v1": {
+        "rows": 21706500,
+        "unique_pairs": 21706500,
+        "mean_candidate_rows_per_query": 500.0
+      },
+      "union_bm25_dense": {
+        "rows": 38720435,
+        "unique_pairs": 38720435,
+        "mean_candidate_rows_per_query": 891.9087600488333
+      },
+      "union_bm25_tt": {
+        "rows": 34304798,
+        "unique_pairs": 34304798,
+        "mean_candidate_rows_per_query": 790.1964388547209
+      },
+      "union_dense_tt": {
+        "rows": 38703569,
+        "unique_pairs": 38703569,
+        "mean_candidate_rows_per_query": 891.5202589086218
+      },
+      "union_all": {
+        "rows": 49868231,
+        "unique_pairs": 49868231,
+        "mean_candidate_rows_per_query": 1148.6935019464215
+      },
+      "rrf_v1": {
+        "rows": 21706500,
+        "unique_pairs": 21706500,
+        "mean_candidate_rows_per_query": 500.0
+      }
+    },
+    "bottleneck": {
+      "conclusion": "mixed; selection bottleneck dominant",
+      "evidence": {
+        "best_single_recall_at_500": 0.7891669516073501,
+        "union_all_recall_at_500": 0.8088999926968974,
+        "rrf_v1_recall_at_50": 0.41282618363677037,
+        "union_all_recall_at_50": 0.39997644472456173
+      },
+      "interpretation": "retriever union adds modest pool coverage over BM25, while top-50 fusion remains far below union top-500 coverage; retrieval and selection both matter, selection is primary bottleneck"
+    }
+  }
 }
