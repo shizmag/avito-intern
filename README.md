@@ -148,8 +148,8 @@ BM25 top500 + Dense top500 + Two-Tower top500 → Deduplicated Full Union (~1500
 ### 1. Окружение и тесты
 
 ```bash
-# Синхронизация зависимостей
-uv sync --extra dev
+# Синхронизация зависимостей (включает dev-группу по умолчанию)
+uv sync
 
 # Полный CI (ruff, pyright, pytest coverage >= 65%)
 make ci
