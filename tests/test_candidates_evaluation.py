@@ -46,6 +46,37 @@ def test_recall_uses_ground_truth_population_and_dedup():
     assert recall_at_k(predictions, ground_truth, 1) == 0.5
 
 
+def test_oracle_union_is_not_truncated_after_deduplication() -> None:
+    from avito_candidate_generation.evaluation import oracle_union_recall_at_k
+
+    candidates = pd.DataFrame(
+        [
+            ("q", "a", "bm25", 2.0, 1),
+            ("q", "b", "bm25", 1.0, 2),
+            ("q", "c", "dense", 2.0, 1),
+            ("q", "d", "dense", 1.0, 2),
+        ],
+        columns=["internal_query_id", "item_id", "source", "score", "rank"],
+    )
+    truth = pd.DataFrame({"internal_query_id": ["q", "q"], "item_id": ["b", "d"]})
+
+    assert oracle_union_recall_at_k(candidates, truth, 2) == 1.0
+
+
+def test_recovered_positives_counts_only_incremental_hits() -> None:
+    from avito_candidate_generation.evaluation import recovered_positives_at_k
+
+    columns = ["internal_query_id", "item_id", "source", "score", "rank"]
+    base = pd.DataFrame([("q", "a", "bm25", 1.0, 1)], columns=columns)
+    additional = pd.DataFrame(
+        [("q", "a", "dense", 2.0, 1), ("q", "b", "dense", 1.0, 2)],
+        columns=columns,
+    )
+    truth = pd.DataFrame({"internal_query_id": ["q", "q"], "item_id": ["a", "b"]})
+
+    assert recovered_positives_at_k(base, additional, truth, 2) == 1
+
+
 def test_exact_search_and_bm25():
     dense = exact_top_k(
         np.array([[1.0, 0.0]]),
@@ -89,6 +120,49 @@ def test_bm25_category_policy_hard_and_fallback() -> None:
         "b",
         "c",
     }
+
+
+def test_bm25_hard_policy_uses_item_category_id() -> None:
+    items = pd.DataFrame(
+        {
+            "item_id": ["wrong", "right"],
+            "text": ["phone", "phone"],
+            "search_category": ["phones", "cars"],
+            "item_category_id": ["cars", "phones"],
+        }
+    )
+    queries = pd.DataFrame(
+        {
+            "internal_query_id": ["q"],
+            "text": ["phone"],
+            "search_category": ["phones"],
+        }
+    )
+
+    result = retrieve_bm25(
+        queries,
+        items,
+        k=2,
+        category_policy="hard",
+        item_category_column="item_category_id",
+    )
+
+    assert result["item_id"].tolist() == ["right"]
+
+
+def test_bm25_index_save_load_round_trip(tmp_path) -> None:
+    from avito_candidate_generation.retrievers.bm25 import BM25Index
+
+    items = pd.DataFrame({"item_id": ["b", "a"], "text": ["blue car", "red phone"]})
+    queries = pd.DataFrame({"internal_query_id": ["q"], "text": ["phone"]})
+    index = BM25Index.fit(items)
+    expected = index.retrieve(queries, k=2)
+
+    path = tmp_path / "bm25"
+    index.save(path)
+    actual = BM25Index.load(path).retrieve(queries, k=2)
+
+    pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_bm25_category_policy_rejects_unknown_policy() -> None:

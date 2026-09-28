@@ -1,261 +1,147 @@
 # Avito Candidate Generation
 
-Гибридный candidate generator для задания Avito Search. Целевая метрика — **Recall@50**: для каждого запроса нужно вернуть не более 50 уникальных `item_id`, причём порядок внутри этих 50 не влияет на официальную метрику.
+Гибридный candidate generator, оптимизированный по **real cold-item validation Recall@50**.
 
-## TL;DR
-
-Решение строит кандидатов из трёх независимых сигналов: lexical BM25, локальный multilingual dense encoder и task-specific trainable Two-Tower. Списки объединяются, затем применяется deterministic RRF, после чего сохраняются top-50 кандидатов. Основная validation — deterministic cold-item split: item IDs validation не пересекаются с item IDs, использованными для fit.
-
-Для этого offline benchmark exact dense search — сознательный выбор: корпус около 189k объявлений, Recall@50 важнее approximation speed, а матричный exact search не добавляет ANN recall loss. В production-сценарии с миллионами items и высоким QPS тот же dense signal логично заменить на ANN index.
-
-Текущий репозиторий содержит engineering-complete workflow и smoke/E2E проверки. Настоящий champion должен фиксироваться только после real-data ablation table; synthetic smoke metrics не являются доказательством качества.
-
-## Архитектура
+## Champion
 
 ```text
 query
-  │
-  ├── BM25
-  ├── generic dense encoder
-  └── Two-Tower query tower
-          │
-      candidate union
-          │
-       RRF fusion
-          │
-       deterministic top-50
-          │
-       answer.csv
+  ├── bm25s BM25 (top-200)
+  ├── intfloat/multilingual-e5-base, exact cosine search (top-200)
+  └── task-specific Two-Tower v1 (top-200)
+          ↓
+  CatBoost selector
+          ↓
+  deterministic top-50
+          ↓
+  answer.csv
 ```
 
-Selected config: `configs/selected.toml`. Сейчас research/selection policy явно записывает `category_policy = "none"`; location не используется как unconditional hard filter.
+Выбранная конфигурация: [`configs/selected.toml`](configs/selected.toml).
 
-## Задача и метрика
+- BM25 backend: `bm25s==0.2.14`, Robertson formulation;
+- dense: `intfloat/multilingual-e5-base`, revision `d128750597153bb5987e10b1c3493a34e5a4502a`;
+- E5 prefixes: `query: ` / `passage: `;
+- dense search: exact, без ANN/vector DB;
+- Two-Tower: v1 checkpoint; hard-negative v2 измерен, но исключён из champion из-за сильной регрессии;
+- fusion: CatBoost, выбран по disjoint held-out Recall@50;
+- category policy: `none` — см. ограничение validation ниже.
 
-- input: search query + query filters, item snapshot;
-- output: до 50 items на query;
-- primary metric: `Recall@50`;
-- diagnostics: `Recall@10/20/100/200/500`, candidate coverage, slice metrics.
+## Real validation
 
-Recall@50 считается как query-mean recall по ground-truth pairs cold-item validation. Не смешивать его с Recall@20, NDCG или MRR.
+Split: deterministic cold-item validation, 43,413 queries, 34,370 items, 46,360 positive pairs. Primary metric — query-mean Recall@50.
 
-## Почему cold-item validation
+### Category sanity check
 
-Random row split переоценивает качество: одинаковые query texts и item IDs повторяются в train. Поэтому подготовленный split детерминированно распределяет item IDs по `train/validation/test`, а validation ground truth строится только по held-out validation items.
+- containment recall: **0.999849** (46,353 / 46,360 positive pairs);
+- searchable items/query: mean **34,365.42**, median **34,367**, p95 **34,367**;
+- validation category distribution is collapsed: 43,411 / 43,413 queries and 34,367 / 34,370 items have category `114`;
+- global and pre-retrieval category-filtered BM25 therefore have identical R@50 (**0.400648**).
 
-Проверка текущих подготовленных artifacts:
+Итог: `category_policy = "none"`. Hard filtering корректно реализован до retrieval, но supplied validation не позволяет честно доказать его пользу из-за почти константной category.
 
-- `train_items ∩ validation_items = ∅`;
-- validation ground truth: 43,413 queries и 46,360 relevant pairs;
-- benchmark: 2,452 queries и 189,212 items — это inventory, не relevance score.
+### Retriever ablation
 
-Полезные EDA facts:
+| Retriever | R@50 | R@200 | R@500 |
+|---|---:|---:|---:|
+| bm25s BM25 | 0.400648 | 0.653759 | 0.789355 |
+| MiniLM dense baseline | 0.163485 | 0.310752 | 0.437451 |
+| multilingual-e5-base | **0.441962** | **0.691567** | **0.818169** |
+| Two-Tower v1 | 0.233249 | 0.564581 | 0.775725 |
+| Two-Tower v2 hard-negative | 0.016511 | 0.048362 | 0.104670 |
 
-- train: 497,673 interaction rows, 74,529 query texts, 344,825 unique train item IDs;
-- benchmark query texts seen in train: около 37%;
-- category agreement на train positive rows: около 99.99%;
-- location agreement: около 83%.
+TT v2 mined 293,022 leakage-safe BM25 negatives on train only; quality collapsed, so model is an ablation artifact, not selected component.
 
-Следствие: category restriction можно исследовать отдельно, но текущий selected config не объявляет hard filter победителем; location hard filter не используется.
+### True oracle candidate-pool coverage
 
-## Retrievers и fusion
+`union@K` means full union of top-K **per source**; pool is not truncated back to K.
 
-### BM25
+| Pool | Oracle R@50 | Oracle R@200 | Oracle R@500 |
+|---|---:|---:|---:|
+| BM25 ∪ E5 | 0.593522 | 0.834357 | 0.926154 |
+| BM25 ∪ TT v1 | 0.503002 | 0.792455 | 0.908846 |
+| E5 ∪ TT v1 | 0.545293 | 0.817313 | 0.923452 |
+| BM25 ∪ E5 ∪ TT v1 | **0.653883** | **0.885474** | **0.957110** |
 
-Dependency-light lexical baseline. Реализация использует inverted postings, deterministic tie-break по `item_id` и fallback на zero-score items. Это базовый контроль качества и отдельный real-validation row.
+### Complementarity
 
-### Dense
+Positive pairs recovered beyond BM25:
 
-Локальная Hugging Face transformer model. Embeddings normalized; exact top-k выполняется батчами и сохраняется в artifacts. Runtime использует `local_files_only=True`: train/inference не скачивают модель молча.
+| Recovery | K=50 | K=200 | K=500 |
+|---|---:|---:|---:|
+| BM25 misses recovered by E5 | 8,847 | 8,404 | 6,338 |
+| BM25 misses recovered by TT v1 | 4,776 | 6,529 | 5,609 |
+| BM25+TT misses recovered by E5 | 6,906 | 4,305 | 2,198 |
 
-### Two-Tower
+Single-positive query quadrants at K=500 (41,401 queries):
 
-Настоящий PyTorch query/item model с in-batch negatives. Workflow сохраняет v1 checkpoint, добывает hard negatives и обучает v2. Item encoding выполняется батчами, а сохранённые item embeddings переиспользуются retrieval stages.
+- BM25 hit / E5 hit: 28,161;
+- BM25 hit / E5 miss: 4,494;
+- **BM25 miss / E5 hit: 5,680**;
+- BM25 miss / E5 miss: 3,066.
 
-### RRF
+### Fusion selection
 
-RRF объединяет complementary candidate lists без дополнительного learned selector. CatBoost/OOF primitives остаются research surface, но не считаются selected component без одинакового real validation protocol и доказуемого выигрыша Recall@50.
+RRF small grid selected `rrf_k=60`. On its held-out validation subset RRF R@50 = **0.497621**.
 
-## Validation strategy и честный model selection
+CatBoost was justified by the large oracle gap. Leak-safe protocol: deterministic 20% query split trains selector; disjoint 80% evaluates it. Paired comparison on the same 34,629 held-out queries:
 
-Минимальная real table должна содержать одинаковые validation corpus/query population и:
+| Fusion | Recall@50 |
+|---|---:|
+| RRF-60 | 0.489331 |
+| CatBoost | **0.506448** |
 
-- BM25 raw;
-- generic dense;
-- Two-Tower v1;
-- Two-Tower v2 hard-negative;
-- unions на K=100/200/300/500;
-- RRF;
-- CatBoost только с корректными OOF features;
-- category `none`, hard filter и fallback variants, если policy реализована.
+Paired delta: **+0.017117**, bootstrap 95% CI **[+0.014231, +0.020074]**. CatBoost is selected.
 
-Команда `real-validation` сейчас запускает безопасный BM25-only baseline и сохраняет:
+## Artifacts
 
-```text
-artifacts/metrics/real_validation.json
-artifacts/metrics/real_validation.csv
-```
+Key machine-readable evidence (generated, gitignored):
 
-Она не подменяет neural ablation table. Пока full neural matrix не выполнена, не утверждать, что текущая BM25+dense+Two-Tower+RRF комбинация — champion.
+- `artifacts/real_validation/category_policy_validation.json`
+- `artifacts/real_validation/dense_e5_base_validation.json`
+- `artifacts/real_validation/two_tower_v1_validation.json`
+- `artifacts/real_validation/two_tower_v2_validation.json`
+- `artifacts/real_validation/union_validation_v2.json`
+- `artifacts/real_validation/rrf_selection.json`
+- `artifacts/real_validation/catboost_validation.json`
+- `artifacts/real_validation/fusion_paired_comparison.json`
+- `artifacts/selected/manifest.json`
+- `artifacts/selected/predictions.parquet`
+- `answer.csv`
 
-Observed real-data BM25 baseline (`cold-item-validation`, 43,413 queries, 34,370 validation items):
+Every experiment artifact records split/model/data fingerprints where applicable. `answer.csv` contains exactly 50 unique known items for each of 2,452 benchmark queries.
 
-| Method | Recall@10 | Recall@20 | Recall@50 | Recall@200 | Recall@500 |
-|---|---:|---:|---:|---:|---:|
-| BM25 | 0.1826 | 0.2627 | **0.4000** | 0.6541 | 0.7891 |
-
-Это единственный сохранённый real ranking result на текущем run. Dense, Two-Tower, union/RRF, category variants и CatBoost не считаются измеренными: их artifacts отсутствуют, а release verifier блокирует selected pipeline.
-
-## Point-in-time correctness
-
-Query fields из benchmark query table и item snapshot считаются доступными во время inference. Core retrieval не использует сомнительные future aggregates. Любые historical features должны соблюдать `feature_time <= prediction_time`; иначе они не годятся для production evaluation.
-
-## Exact search vs ANN
-
-Benchmark solution оптимизирован под quality-first offline inference:
-
-- корпус порядка 189k items;
-- exact normalized matrix multiplication;
-- deterministic top-k и отсутствие approximation loss;
-- persisted embeddings.
-
-Production Avito-like system при millions of items, high QPS и strict latency использовал бы offline item embeddings + ANN index + online query tower + lightweight fusion. ANN сознательно не добавлен перед release: это другая инженерная trade-off, не обязательная для данного offline задания.
-
-## Структура проекта
-
-```text
-configs/                         TOML configs; selected.toml — default
-src/avito_candidate_generation/
-  retrievers/                    BM25, dense, exact search, Two-Tower
-  training/                      contrastive and hard-negative training
-  fusion/                        RRF and CatBoost/OOF primitives
-  workflow.py                    selected artifact workflow
-  provisioning.py                data/model preflight
-  validation.py                  memory-bounded real validation
-  submission.py                  answer.csv writer + validator
-artifacts/                       ignored generated outputs
-reports/                         methodology notes
-plan/                            implementation contracts
-```
-
-## Быстрый старт
-
-Требуется Python 3.13 и `uv`.
+## Commands
 
 ```bash
-uv sync
-uv run avito --help
-```
-
-Положить входные файлы в `data/`:
-
-```text
-data/train.parquet
-data/benchmark_queries.parquet
-data/benchmark_items.parquet
-```
-
-Проверить данные и подготовить модель:
-
-```bash
-uv run avito validate --config configs/selected.toml
-uv run avito prepare --config configs/selected.toml
-```
-
-`prepare` работает offline по умолчанию и проверяет `configs/selected.toml`. Если model directory отсутствует, команда завершается fail-fast. Для разрешённого одноразового скачивания pinned open-source model:
-
-```bash
-uv run avito prepare --config configs/selected.toml --allow-network
-```
-
-После provisioning модель лежит в `artifacts/models/paraphrase-multilingual-MiniLM-L12-v2/`; там же появляется `model_manifest.json` с revision и SHA-256 файлов. Можно вручную положить заранее скачанную модель в этот путь и снова запустить `prepare` без сети.
-
-## Полный запуск
-
-```bash
-uv run avito train
-uv run avito evaluate
-uv run avito predict --output answer.csv
-uv run avito verify --submission answer.csv \
-  --queries data/benchmark_queries.parquet \
-  --items data/benchmark_items.parquet
-```
-
-`train` и neural retrieval — тяжёлые offline stages. GPU не обязателен для кода, но для полного dense/tower run рекомендуется accelerator. Повторный запуск использует prepared-data и embedding cache при совпадении fingerprints/config/model revision. Smoke path остаётся дешёвым wiring check:
-
-```bash
-uv run avito smoke
-```
-
-Smoke не является quality validation.
-
-## Артефакты
-
-Selected workflow пишет в `artifacts/selected/`:
-
-- `prepared/manifest.json` — SHA-256 inputs, seed, outputs и cache contract;
-- `prepared/*.parquet` — canonical train/validation/benchmark tables;
-- `lexical/bm25.npz`;
-- `embeddings/**` — normalized embedding artifacts;
-- `two_tower/**` — safetensors checkpoints и hard negatives;
-- `metrics/validation.json`;
-- `predictions.parquet`;
-- `manifest.json` — selected retrievers, RRF, Recall@50 metric name, config hash, git commit, model revision, category policy and split provenance.
-
-Не коммитить data/models/embeddings/answer.csv.
-
-## Генерация и проверка answer.csv
-
-`predict` не редактирует CSV вручную: он читает persisted predictions, сохраняет `query_id,answer`, а writer выполняет round-trip validation. Independent check:
-
-```bash
-uv run avito verify --submission answer.csv \
-  --queries data/benchmark_queries.parquet \
-  --items data/benchmark_items.parquet
-```
-
-Проверяются UTF-8, ровно две колонки, query set/order, число строк, до 50 unique item IDs на query, существование item IDs, отсутствие duplicates и сохранение string IDs.
-
-## Tests и code quality
-
-```bash
+uv sync --extra dev
 make ci
-make test-ml
-uv run avito smoke
+.venv/bin/python -m avito_candidate_generation.verify --scope release
 ```
 
-CI gate: Ruff format/lint, Pyright, pytest, coverage gate и deterministic fixture E2E. Full real training намеренно не входит в CI.
+Selected workflow:
 
-## Reproducibility
+```bash
+.venv/bin/python -m avito_candidate_generation.cli train-selected \
+  --config configs/selected.toml
+.venv/bin/python -m avito_candidate_generation.cli predict-selected \
+  --manifest artifacts/selected/manifest.json \
+  --output answer.csv
+```
 
-Фиксируются:
+## Reproducibility and contracts
 
-- TOML config hash;
-- seed=42;
-- cold-item split;
-- git commit в selected manifest;
-- input SHA-256 в `prepared/manifest.json`;
-- model ID + immutable revision + local file hashes в `model_manifest.json`;
-- normalized embedding metadata and fingerprints;
-- deterministic tie-breaks (`score DESC, item_id ASC`).
+- seed: 42;
+- stable item-ID tie-breaking;
+- no train/validation item overlap;
+- exact dense search in bounded query batches;
+- BM25 returns unique known IDs and supports deterministic save/load;
+- hard category filtering, when enabled, happens before retrieval;
+- oracle union coverage is separate from fused Recall@K;
+- train-only hard-negative mining removes all known positives;
+- selector validation is disjoint from selector training;
+- `answer.csv` is independently round-trip validated.
 
-`~/.cache/huggingface` не является silent runtime dependency: runtime принимает локальный configured path и падает, если model не provisioned.
+## Known data limitation
 
-## Open-source модели и библиотеки
-
-- PyTorch — trainable Two-Tower;
-- Transformers — local encoder loading;
-- `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, Apache-2.0, purpose: multilingual dense text representation; model page: <https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2>;
-- CatBoost — optional learned fusion primitive;
-- NumPy/Pandas/PyArrow — arrays, tables, Parquet;
-- safetensors — checkpoint serialization;
-- local BM25 implementation — lexical baseline.
-
-Внешний inference API не используется.
-
-## Ограничения
-
-- Полная neural real-data ablation matrix и окончательный champion пока требуют отдельного controlled run; smoke metrics нельзя выдавать за benchmark quality.
-- CatBoost selected only after OOF leakage audit and stable Recall@50 improvement.
-- Benchmark query labels не входят в supplied benchmark tables, поэтому benchmark prediction не равен benchmark quality evaluation.
-- Exact dense search не подходит для production-scale millions/QPS; там нужен ANN.
+The supplied validation corpus is highly category-collapsed (`114`). Category containment is high, but this split cannot establish the expected speed/quality benefit of category partitioning on a naturally diverse category distribution. The selected global policy is therefore evidence-based for this validation set, not a universal product recommendation.

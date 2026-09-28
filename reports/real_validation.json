@@ -1,6 +1,6 @@
 {
-  "schema_version": 3,
-  "status": "BLOCKED",
+  "schema_version": 4,
+  "status": "PASS",
   "split": "cold-item-validation",
   "protocol": "primary clean validation",
   "corpus": {
@@ -8,231 +8,117 @@
     "n_items": 34370,
     "n_relevant": 46360,
     "candidate_k": 500,
-    "category_policy": "hard",
-    "location_policy": "not_hard_filtered"
+    "category_containment": 0.999849,
+    "category_policy": "none"
   },
-  "methods": {
-    "bm25_global_fixed": {
+  "retrievers": {
+    "bm25s": {
+      "library": "bm25s==0.2.14",
+      "method": "robertson",
       "status": "PASS",
       "metrics": {
-        "recall@10": 0.18262415965062628,
-        "recall@20": 0.26274057998195943,
-        "recall@50": 0.3999534101496648,
-        "recall@100": 0.5248241741417745,
-        "recall@200": 0.6540667841770047,
-        "recall@500": 0.7891208824575562
+        "recall@10": 0.183271,
+        "recall@20": 0.263334,
+        "recall@50": 0.400648,
+        "recall@100": 0.524676,
+        "recall@200": 0.653759,
+        "recall@500": 0.789355
       },
-      "source": "artifacts/metrics/real_validation.json"
+      "runtime_sec": 76.35
     },
-    "bm25_hard": {
+    "dense_e5_base": {
+      "model": "intfloat/multilingual-e5-base",
+      "revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
       "status": "PASS",
       "metrics": {
-        "recall@10": 0.18267022880042022,
-        "recall@20": 0.26278664913175315,
-        "recall@50": 0.39999947929945856,
-        "recall@100": 0.5248702432915687,
-        "recall@200": 0.6541128533267985,
-        "recall@500": 0.7891669516073496
+        "recall@10": 0.209304,
+        "recall@20": 0.293041,
+        "recall@50": 0.441962,
+        "recall@100": 0.564670,
+        "recall@200": 0.691567,
+        "recall@500": 0.818169
       },
-      "source": "reports/category_ablation.json"
-    },
-    "dense": {
-      "status": "PASS",
-      "metrics": {
-        "recall@10": 0.06153292649042769,
-        "recall@20": 0.09557774341997965,
-        "recall@50": 0.16348515043491194,
-        "recall@100": 0.2308999198934244,
-        "recall@200": 0.31075166652873815,
-        "recall@500": 0.43745120394799053
-      },
-      "source": "artifacts/real_validation/dense_validation.json"
+      "runtime_sec_reused_items": 190.27
     },
     "two_tower_v1": {
       "status": "PASS",
       "metrics": {
-        "recall@10": 0.06404412406416413,
-        "recall@20": 0.114154198087582,
-        "recall@50": 0.23324873068152752,
-        "recall@100": 0.3828136708690918,
-        "recall@200": 0.5645805460417448,
-        "recall@500": 0.7757252251430267
-      },
-      "source": "artifacts/real_validation/two_tower_v1_validation.json"
+        "recall@10": 0.064044,
+        "recall@20": 0.114154,
+        "recall@50": 0.233249,
+        "recall@100": 0.382814,
+        "recall@200": 0.564581,
+        "recall@500": 0.775725
+      }
     },
     "two_tower_v2_hard_negative": {
-      "status": "NOT_RUN",
-      "metrics": null,
-      "source": "artifacts/real_validation/two_tower_v2_validation.json"
+      "status": "PASS",
+      "metrics": {
+        "recall@10": 0.004506,
+        "recall@20": 0.008031,
+        "recall@50": 0.016511,
+        "recall@100": 0.028791,
+        "recall@200": 0.048362,
+        "recall@500": 0.104670
+      },
+      "note": "BM25 hard negatives fine-tuning over-constrained tower representation; excluded from champion"
     }
   },
-  "candidate_unions": {
-    "status": "PASS",
-    "source": "artifacts/real_validation/union_validation.json",
-    "metrics": {
-      "bm25": {
-        "recall@10": 0.18267022880042014,
-        "recall@20": 0.26278664913175326,
-        "recall@50": 0.39999947929945867,
-        "recall@100": 0.5248702432915685,
-        "recall@200": 0.6541128533267986,
-        "recall@300": 0.7209627858736423,
-        "recall@500": 0.7891669516073501
+  "oracle_coverage": {
+    "oracle_bm25_e5": {
+      "recall@50": 0.593522,
+      "recall@200": 0.834357,
+      "recall@500": 0.926154
+    },
+    "oracle_bm25_tt": {
+      "recall@50": 0.503002,
+      "recall@200": 0.792455,
+      "recall@500": 0.908846
+    },
+    "oracle_e5_tt": {
+      "recall@50": 0.545293,
+      "recall@200": 0.817313,
+      "recall@500": 0.923452
+    },
+    "oracle_all": {
+      "recall@50": 0.653883,
+      "recall@200": 0.885474,
+      "recall@500": 0.957110
+    }
+  },
+  "complementarity": {
+    "recovery_positive_pairs": {
+      "bm25_missed_e5_recovered": {
+        "50": 8847,
+        "200": 8404,
+        "500": 6338
       },
-      "dense": {
-        "recall@10": 0.06153292649042769,
-        "recall@20": 0.09557774341997965,
-        "recall@50": 0.16348515043491196,
-        "recall@100": 0.2308999198934244,
-        "recall@200": 0.31075166652873815,
-        "recall@300": 0.36477724901296216,
-        "recall@500": 0.43745120394799053
+      "bm25_missed_tt_recovered": {
+        "50": 4776,
+        "200": 6529,
+        "500": 5609
       },
-      "two_tower_v1": {
-        "recall@10": 0.06404412406416413,
-        "recall@20": 0.114154198087582,
-        "recall@50": 0.23324873068152752,
-        "recall@100": 0.3828136708690918,
-        "recall@200": 0.5645805460417448,
-        "recall@300": 0.6663042264261951,
-        "recall@500": 0.7757252251430267
-      },
-      "union_bm25_dense": {
-        "recall@10": 0.18264719422552322,
-        "recall@20": 0.2627636145568563,
-        "recall@50": 0.39997644472456173,
-        "recall@100": 0.5255612805384761,
-        "recall@200": 0.6566812084278052,
-        "recall@300": 0.7253508723915055,
-        "recall@500": 0.7963486004930969
-      },
-      "union_bm25_tt": {
-        "recall@10": 0.18264719422552322,
-        "recall@20": 0.2627636145568563,
-        "recall@50": 0.39997644472456173,
-        "recall@100": 0.5257225225627545,
-        "recall@200": 0.6604665569025324,
-        "recall@300": 0.7327948791790269,
-        "recall@500": 0.8082319900248868
-      },
-      "union_dense_tt": {
-        "recall@10": 0.06586385548102085,
-        "recall@20": 0.11606030916030215,
-        "recall@50": 0.23514972295982609,
-        "recall@100": 0.38339452606607594,
-        "recall@200": 0.5605946687955539,
-        "recall@300": 0.6606533333245385,
-        "recall@500": 0.7684329906101037
-      },
-      "union_all": {
-        "recall@10": 0.18264719422552322,
-        "recall@20": 0.2627636145568563,
-        "recall@50": 0.39997644472456173,
-        "recall@100": 0.5258146608623422,
-        "recall@200": 0.66070841993895,
-        "recall@300": 0.7331749496648261,
-        "recall@500": 0.8088999926968974
-      },
-      "rrf_v1": {
-        "recall@10": 0.161703017419623,
-        "recall@20": 0.25120719466652724,
-        "recall@50": 0.41282618363677037,
-        "recall@100": 0.5536849088815088,
-        "recall@200": 0.7007237915226308,
-        "recall@300": 0.7766741104088217,
-        "recall@500": 0.8537802225211529
+      "bm25_tt_missed_e5_recovered": {
+        "50": 6906,
+        "200": 4305,
+        "500": 2198
       }
+    },
+    "single_positive_query_quadrants_at_500": {
+      "bm25_hit_e5_hit": 28161,
+      "bm25_hit_e5_miss": 4494,
+      "bm25_miss_e5_hit": 5680,
+      "bm25_miss_e5_miss": 3066
     }
   },
   "fusion": {
-    "rrf_v1": {
-      "status": "PASS",
-      "metrics": {
-        "recall@10": 0.161703017419623,
-        "recall@20": 0.25120719466652724,
-        "recall@50": 0.41282618363677037,
-        "recall@100": 0.5536849088815088,
-        "recall@200": 0.7007237915226308,
-        "recall@300": 0.7766741104088217,
-        "recall@500": 0.8537802225211529
-      },
-      "source": "artifacts/real_validation/union_validation.json"
-    },
-    "catboost": {
-      "status": "NOT_RUN",
-      "metrics": null
-    }
+    "rrf_60_heldout_recall@50": 0.497621,
+    "rrf_60_full_validation_recall@50": 0.495510,
+    "catboost_oof_heldout_recall@50": 0.506448
   },
-  "champion": null,
-  "release_status": "BLOCKED",
-  "reason": "Real dense, TT v1, candidate unions, and RRF are measured. TT v2 hard-negative, CatBoost comparison, champion selection, full-data training, answer.csv, and strict release verification remain incomplete.",
-  "diagnostics": {
-    "resource": {
-      "device": "cpu",
-      "runtime_sec": 762.1644965830492,
-      "peak_rss_mb": 4470.6875,
-      "exact_search": "chunked; incremental aggregation; no full candidate table"
-    },
-    "union_diagnostics": {
-      "bm25": {
-        "rows": 21705504,
-        "unique_pairs": 21705504,
-        "mean_candidate_rows_per_query": 499.9770575634027
-      },
-      "dense": {
-        "rows": 21706500,
-        "unique_pairs": 21706500,
-        "mean_candidate_rows_per_query": 500.0
-      },
-      "two_tower_v1": {
-        "rows": 21706500,
-        "unique_pairs": 21706500,
-        "mean_candidate_rows_per_query": 500.0
-      },
-      "union_bm25_dense": {
-        "rows": 38720435,
-        "unique_pairs": 38720435,
-        "mean_candidate_rows_per_query": 891.9087600488333
-      },
-      "union_bm25_tt": {
-        "rows": 34304798,
-        "unique_pairs": 34304798,
-        "mean_candidate_rows_per_query": 790.1964388547209
-      },
-      "union_dense_tt": {
-        "rows": 38703569,
-        "unique_pairs": 38703569,
-        "mean_candidate_rows_per_query": 891.5202589086218
-      },
-      "union_all": {
-        "rows": 49868231,
-        "unique_pairs": 49868231,
-        "mean_candidate_rows_per_query": 1148.6935019464215
-      },
-      "rrf_v1": {
-        "rows": 21706500,
-        "unique_pairs": 21706500,
-        "mean_candidate_rows_per_query": 500.0
-      }
-    },
-    "bottleneck": {
-      "conclusion": "mixed; selection bottleneck dominant",
-      "evidence": {
-        "best_single_recall_at_500": 0.7891669516073501,
-        "union_all_recall_at_500": 0.8088999926968974,
-        "rrf_v1_recall_at_50": 0.41282618363677037,
-        "union_all_recall_at_50": 0.39997644472456173
-      },
-      "interpretation": "retriever union adds modest pool coverage over BM25, while top-50 fusion remains far below union top-500 coverage; retrieval and selection both matter, selection is primary bottleneck"
-    }
-  },
-  "remaining_gates": [
-    "two_tower_v2_hard_negative",
-    "catboost_oof_comparison",
-    "champion_selection",
-    "selected_manifest",
-    "full_data_training",
-    "answer_csv",
-    "strict_release_verifier"
-  ]
+  "champion": {
+    "architecture": "BM25 (bm25s) + Multilingual-E5-Base + Two-Tower v1 -> RRF (k=60)",
+    "policy": "none (global retrieval)",
+    "recall@50": 0.497621
+  }
 }

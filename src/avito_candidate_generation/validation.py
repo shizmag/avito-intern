@@ -6,16 +6,15 @@ import csv
 import json
 import os
 from collections.abc import Callable, Sequence
-
-import numpy as np
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
-from .retrievers.exact_search import exact_top_k
 
 from .config import load_config
 from .retrievers.bm25 import BM25Index
+from .retrievers.exact_search import exact_top_k
 from .workflow import _compose_item_text, _compose_query_text, _prepare_workflow_paths
 
 
@@ -154,11 +153,56 @@ def run_bm25_validation(
     queries = _compose_query_text(pd.read_parquet(paths["validation_queries"]))
     items = _compose_item_text(pd.read_parquet(paths["validation_items"]))
     ground_truth = pd.read_parquet(paths["validation_ground_truth"])
-    index = BM25Index.fit(items)
+    category_policy = str(
+        config.values.get("selection", {}).get("category_policy", "none")
+    )
+    if category_policy not in {"none", "hard", "fallback"}:
+        raise ValueError("category_policy must be one of none, hard, fallback")
+    global_index = BM25Index.fit(items)
+    category_indexes = {
+        str(category): BM25Index.fit(group)
+        for category, group in items.dropna(subset=["item_category_id"]).groupby(
+            "item_category_id", sort=False
+        )
+    }
+
+    def retrieve_batch(batch: pd.DataFrame, k: int) -> pd.DataFrame:
+        if category_policy == "none":
+            return global_index.retrieve(batch, k=k)
+        candidates: list[pd.DataFrame] = []
+        for category, group in batch.groupby(
+            "search_category", sort=False, dropna=False
+        ):
+            category_key = (
+                None if category is None or str(category) == "nan" else str(category)
+            )
+            index = (
+                category_indexes.get(category_key) if category_key is not None else None
+            )
+            if index is None:
+                if category_policy == "hard":
+                    continue
+                index = global_index
+            result = index.retrieve(group, k=k)
+            if result.empty and category_policy == "fallback":
+                result = global_index.retrieve(group, k=k)
+            candidates.append(result)
+        if not candidates:
+            return pd.DataFrame(
+                columns=[
+                    "internal_query_id",
+                    "item_id",
+                    "source",
+                    "score",
+                    "rank",
+                ]
+            )
+        return pd.concat(candidates, ignore_index=True)
+
     metrics = stream_recall_at_k(
         queries,
         ground_truth,
-        lambda batch, k: index.retrieve(batch, k=k),
+        retrieve_batch,
         batch_size=batch_size,
     )
     payload: dict[str, Any] = {
@@ -166,9 +210,7 @@ def run_bm25_validation(
         "status": "PASS",
         "method": "bm25",
         "split": "cold-item-validation",
-        "category_policy": config.values.get("selection", {}).get(
-            "category_policy", "unspecified"
-        ),
+        "category_policy": category_policy,
         "n_queries": ground_truth["internal_query_id"].nunique(),
         "n_items": len(items),
         "n_relevant": len(ground_truth),

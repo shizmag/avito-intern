@@ -11,21 +11,23 @@ benchmark_queries = "data/benchmark_queries.parquet"
 benchmark_items = "data/benchmark_items.parquet"
 
 [selection]
-source = "rrf"
+source = "catboost"
 retrievers = ["bm25", "dense", "two_tower"]
-category_policy = "hard"
-retrieval_k = 500
+category_policy = "none"
+retrieval_k = 200
 metric = "recall@50"
-fusion = "rrf"
+fusion = "catboost"
 
 [dense]
-model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-model_path = "artifacts/models/paraphrase-multilingual-MiniLM-L12-v2"
-revision = "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"
+model = "intfloat/multilingual-e5-base"
+model_path = "artifacts/models/multilingual-e5-base"
+revision = "d128750597153bb5987e10b1c3493a34e5a4502a"
 batch_size = 128
 normalize = true
-max_length = 64
+max_length = 128
 device = "auto"
+query_prefix = "query: "
+item_prefix = "passage: "
 
 [two_tower]
 dimension = 32
@@ -41,3 +43,8 @@ max_per_query = 20
 
 [fusion]
 rrf_k = 60
+
+[catboost]
+iterations = 250
+depth = 7
+learning_rate = 0.08

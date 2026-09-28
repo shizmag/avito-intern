@@ -1,8 +1,8 @@
 from avito_candidate_generation.end_to_end import run_end_to_end
 
 
-def test_end_to_end_manifest_reports_blocked_stages() -> None:
-    result = run_end_to_end(".")
+def test_end_to_end_manifest_reports_blocked_stages(tmp_path) -> None:
+    result = run_end_to_end(tmp_path)
     assert result["status"] == "BLOCKED"
     stages = result["stages"]
     assert isinstance(stages, dict)

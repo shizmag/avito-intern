@@ -71,13 +71,18 @@ def test_selected_candidate_union_includes_two_tower_source() -> None:
     assert set(result["retriever_count"]) == {3}
 
 
-def test_cli_verify_dispatch(capsys) -> None:
+def test_cli_verify_dispatch(capsys, tmp_path) -> None:
     import sys
 
     cli_main = cast(Any, import_module("avito_candidate_generation.cli").main)
     previous = sys.argv
     try:
-        sys.argv = ["avito-candidate-generation", "verify", "--root", "."]
+        sys.argv = [
+            "avito-candidate-generation",
+            "verify",
+            "--root",
+            str(tmp_path),
+        ]
         with pytest.raises(SystemExit, match="2"):
             cli_main()
     finally:

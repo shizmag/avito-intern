@@ -30,7 +30,84 @@ def recall_at_k(predictions: pd.DataFrame, ground_truth: pd.DataFrame, k: int) -
     for query_id in query_ids:
         got = set(ranked.loc[ranked["internal_query_id"].astype(str) == query_id, "item_id"].head(k).astype(str).tolist())
         values.append(len(got & relevant[query_id]) / len(relevant[query_id]))
-    return float(sum(values) / len(values)) if values else 0.0
+    return sum(values) / len(values) if values else 0.0
+
+
+
+def _top_k_pairs(candidates: pd.DataFrame, k: int) -> set[tuple[str, str]]:
+    """Return unique query/item pairs from each source's top-K list."""
+    if k < 1:
+        raise ValueError("k must be positive")
+    validate_candidates(candidates)
+    ranked = candidates.sort_values(
+        ["source", "internal_query_id", "rank", "item_id"], kind="mergesort"
+    ).drop_duplicates(["source", "internal_query_id", "item_id"])
+    top = ranked.groupby(
+        ["source", "internal_query_id"], sort=False, group_keys=False
+    ).head(k)
+    return set(
+        zip(
+            top["internal_query_id"].astype(str),
+            top["item_id"].astype(str),
+            strict=True,
+        )
+    )
+
+
+def oracle_union_recall_at_k(
+    candidates: pd.DataFrame, ground_truth: pd.DataFrame, k: int
+) -> float:
+    """Query-mean recall of the full union of every source's top-K list.
+
+    Pool is not truncated after union and can contain up to ``K * n_sources``
+    unique items per query. This is candidate coverage, not fused Recall@K.
+    """
+    required = {"internal_query_id", "item_id"}
+    if not required.issubset(ground_truth.columns):
+        raise CandidateError("ground truth requires internal_query_id and item_id")
+    if ground_truth.duplicated(["internal_query_id", "item_id"]).any():
+        raise CandidateError("duplicate ground-truth pair")
+    query_ids = list(
+        dict.fromkeys(ground_truth["internal_query_id"].astype(str).tolist())
+    )
+    pairs = _top_k_pairs(candidates, k)
+    predicted_queries = {query_id for query_id, _ in pairs}
+    if not predicted_queries.issubset(set(query_ids)):
+        raise CandidateError("prediction-only query")
+    relevant = {
+        str(query_id): set(group["item_id"].astype(str))
+        for query_id, group in ground_truth.groupby("internal_query_id")
+    }
+    predicted: dict[str, set[str]] = {}
+    for query_id, item_id in pairs:
+        predicted.setdefault(query_id, set()).add(item_id)
+    values = [
+        len(predicted.get(query_id, set()) & relevant[query_id])
+        / len(relevant[query_id])
+        for query_id in query_ids
+    ]
+    return sum(values) / len(values) if values else 0.0
+
+
+def recovered_positives_at_k(
+    base: pd.DataFrame,
+    additional: pd.DataFrame,
+    ground_truth: pd.DataFrame,
+    k: int,
+) -> int:
+    """Count positive pairs missed by base and recovered by additional top-K."""
+    if ground_truth.duplicated(["internal_query_id", "item_id"]).any():
+        raise CandidateError("duplicate ground-truth pair")
+    relevant = set(
+        zip(
+            ground_truth["internal_query_id"].astype(str),
+            ground_truth["item_id"].astype(str),
+            strict=True,
+        )
+    )
+    base_hits = _top_k_pairs(base, k) & relevant
+    additional_hits = _top_k_pairs(additional, k) & relevant
+    return len(additional_hits - base_hits)
 
 
 def evaluate_candidates(predictions: pd.DataFrame, ground_truth: pd.DataFrame, ks: tuple[int, ...] = (10, 20, 50, 100, 200, 500), *, stage: str = "evaluation", split: str = "validation", candidate_fingerprint: str | None = None, ground_truth_fingerprint: str | None = None) -> dict[str, Any]:

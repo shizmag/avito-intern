@@ -100,6 +100,16 @@ def test_composed_text_preserves_category_metadata() -> None:
     assert _compose_item_text(item).loc[0, "search_category"] == "123"
 
 
+def test_compose_item_text_preserves_item_category_id() -> None:
+    from avito_candidate_generation.workflow import _compose_item_text
+
+    item = pd.DataFrame(
+        {"item_id": ["i"], "item_title_raw": ["phone"], "item_category_id": [114]}
+    )
+
+    assert _compose_item_text(item).loc[0, "item_category_id"] == "114"
+
+
 def test_selected_workflow_smoke_is_reproducible(tmp_path: Path) -> None:
     from avito_candidate_generation.workflow import (  # type: ignore[import-not-found]
         evaluate_selected,
@@ -121,7 +131,7 @@ def test_selected_workflow_smoke_is_reproducible(tmp_path: Path) -> None:
     assert (first.parent / "metrics/validation.json").read_text() == (
         second.parent / "metrics/validation.json"
     ).read_text()
-    assert evaluate_selected(first)["rrf/recall@50"] >= 0.0
+    assert evaluate_selected(first)["catboost/recall@50"] >= 0.0
     output = tmp_path / "answer.csv"
     predict_selected(first, output_csv=output)
     assert output.is_file()

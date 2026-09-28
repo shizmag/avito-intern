@@ -17,7 +17,8 @@ from .artifacts import git_info
 from .config import Config, load_config, resolve_path
 from .data import build_canonical
 from .evaluation import evaluate_candidates
-from .fusion.rrf import reciprocal_rank_fusion
+from .fusion.catboost import save_selector, score_selector, train_selector
+from .fusion.features import build_pair_features
 from .inference import rank_predictions
 from .pipeline import FinalPipeline, SelectedManifest
 from .retrievers.bm25 import BM25Index, retrieve_bm25
@@ -34,11 +35,9 @@ from .retrievers.exact_search import exact_top_k
 from .retrievers.two_tower import TwoTowerModel
 from .splits import assign_item_splits, build_ground_truth
 from .submission import write_submission
-from .training.hard_negatives import mine_hard_negatives
 from .training.two_tower import (
     TrainingConfig,
     train_two_tower,
-    train_two_tower_with_hard_negatives,
 )
 
 
@@ -138,8 +137,9 @@ def _compose_item_text(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("item table requires item_id")
     if "text" in work:
         keep = ["item_id", "text"]
-        if "search_category" in work:
-            keep.append("search_category")
+        for metadata in ("search_category", "item_category_id"):
+            if metadata in work:
+                keep.append(metadata)
         result = _frame(work[keep].copy())
     else:
         columns = [
@@ -157,10 +157,14 @@ def _compose_item_text(frame: pd.DataFrame) -> pd.DataFrame:
         result = pd.DataFrame({"item_id": work["item_id"].astype(str), "text": text})
         if "search_category" in work:
             result["search_category"] = work["search_category"].tolist()
+        if "item_category_id" in work:
+            result["item_category_id"] = work["item_category_id"].tolist()
     result["item_id"] = result["item_id"].astype(str)
     result["text"] = result["text"].fillna("").astype(str)
     if "search_category" in result:
         result["search_category"] = result["search_category"].fillna("").astype(str)
+    if "item_category_id" in result:
+        result["item_category_id"] = result["item_category_id"].fillna("").astype(str)
     return _frame(result.reset_index(drop=True))
 
 
@@ -413,9 +417,10 @@ def _save_embeddings(
     *,
     revision: str = "unknown",
     batch_size: int = 32,
+    text_prefix: str = "",
 ) -> EmbeddingArtifact:
     item_ids = items["item_id"].tolist()
-    texts = items["text"].tolist()
+    texts = [text_prefix + str(text) for text in items["text"].tolist()]
     cached = load_cached_embedding_artifact(
         directory,
         item_ids=item_ids,
@@ -483,10 +488,21 @@ def _retrieve_sources(
     *,
     encoder_batch_size: int = 32,
     category_policy: str = "none",
+    dense_query_prefix: str = "",
 ) -> list[pd.DataFrame]:
-    bm25 = retrieve_bm25(queries, items, k=k, category_policy=category_policy)
+    bm25 = retrieve_bm25(
+        queries,
+        items,
+        k=k,
+        category_policy=category_policy,
+        item_category_column="item_category_id",
+    )
     dense = exact_top_k(
-        encode_texts(encoder, queries["text"].tolist(), batch_size=encoder_batch_size),
+        encode_texts(
+            encoder,
+            [dense_query_prefix + str(text) for text in queries["text"].tolist()],
+            batch_size=encoder_batch_size,
+        ),
         generic.embeddings,
         list(generic.item_ids),
         k=k,
@@ -522,6 +538,53 @@ def _union(sources: list[pd.DataFrame]) -> pd.DataFrame:
             drop=True
         )
     )
+
+
+def prepare_selector_features(
+    candidates: pd.DataFrame,
+    *,
+    source_names: tuple[str, ...] = ("bm25", "dense", "two_tower"),
+    missing_rank: int,
+) -> pd.DataFrame:
+    """Build numeric pair features with deterministic missing-value semantics."""
+    features = build_pair_features(candidates, source_names=list(source_names))
+    for source in source_names:
+        rank = f"{source}_rank"
+        score = f"{source}_score"
+        present = f"{source}_present"
+        features[present] = features[present].fillna(False).astype("int8")
+        features[rank] = features[rank].fillna(missing_rank).astype("int32")
+        score_values = cast(list[float], features[score].dropna().tolist())
+        floor = min(score_values) - 1.0
+        features[score] = features[score].fillna(floor).astype("float32")
+    features["retriever_count"] = features["retriever_count"].astype("int8")
+    return features
+
+
+def rank_with_selector(
+    candidates: pd.DataFrame,
+    model: dict[str, object],
+    *,
+    limit: int,
+    missing_rank: int,
+    source_names: tuple[str, ...] = ("bm25", "dense", "two_tower"),
+) -> pd.DataFrame:
+    """Score unique candidate pairs and return deterministic per-query top-K."""
+    features = prepare_selector_features(
+        candidates, source_names=source_names, missing_rank=missing_rank
+    )
+    features["score"] = score_selector(features, model)
+    features = features.sort_values(
+        ["internal_query_id", "score", "item_id"],
+        ascending=[True, False, True],
+        kind="mergesort",
+    )
+    result = features.groupby("internal_query_id", group_keys=False).head(limit).copy()
+    result["rank"] = result.groupby("internal_query_id").cumcount() + 1
+    result["source"] = "catboost"
+    return pd.DataFrame(
+        result[["internal_query_id", "item_id", "source", "score", "rank"]]
+    ).reset_index(drop=True)
 
 
 def _component(root: Path, value: str) -> Path:
@@ -575,9 +638,10 @@ def train_selected(
         )
     else:
         model_name = str(dense_config.get("model", encoder.__class__.__name__))
+    dense_query_prefix = str(dense_config.get("query_prefix", ""))
+    dense_item_prefix = str(dense_config.get("item_prefix", ""))
     try:
         k = int(selection.get("retrieval_k", 500))
-        rrf_k = int(config.values.get("fusion", {}).get("rrf_k", 60))
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid selected retrieval configuration") from exc
 
@@ -590,13 +654,14 @@ def train_selected(
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid encoder batch-size configuration") from exc
     model_revision = str(dense_config.get("revision", "unknown"))
-    generic_train = _save_embeddings(
+    _ = _save_embeddings(
         encoder,
         data.train_items,
         root / "embeddings/generic/train",
         model_name,
         revision=model_revision,
         batch_size=encoder_batch_size,
+        text_prefix=dense_item_prefix,
     )
     try:
         tower_config_obj = TrainingConfig(
@@ -622,75 +687,13 @@ def train_selected(
     )
     v1_path = root / "two_tower/v1/checkpoint.json"
     tower_v1.save(v1_path)
-    tower_v1_train = _save_tower_embeddings(
+    _ = _save_tower_embeddings(
         tower_v1,
         data.train_items,
         root / "embeddings/two_tower/v1/train",
         "v1",
         batch_size=tower_batch_size,
     )
-
-    train_sources = _retrieve_sources(
-        data.train_queries,
-        data.train_items,
-        encoder,
-        generic_train,
-        tower_v1,
-        tower_v1_train,
-        k,
-        encoder_batch_size=encoder_batch_size,
-        category_policy=str(selection.get("category_policy", "none")),
-    )
-    positives = cast(pd.DataFrame, data.train_pairs[["internal_query_id", "item_id"]])
-    try:
-        max_negatives = int(
-            config.values.get("hard_negatives", {}).get("max_per_query", 20)
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValueError("invalid hard-negative configuration") from exc
-    negatives = mine_hard_negatives(
-        cast(pd.DataFrame, pd.concat(train_sources, ignore_index=True)),
-        positives,
-        max_per_query=max_negatives,
-    )
-    if negatives.empty:
-        raise ValueError("selected workflow produced no hard negatives")
-    negative_path = root / "two_tower/hard_negatives/negatives.parquet"
-    negative_path.parent.mkdir(parents=True, exist_ok=True)
-    negatives.to_parquet(negative_path, index=False)
-    _write_json(
-        root / "two_tower/hard_negatives/manifest.json",
-        {"schema_version": 1, "rows": len(negatives), "status": "PASS"},
-    )
-    negatives_by_query = {
-        str(query_id): group["item_id"].astype(str).tolist()
-        for query_id, group in negatives.groupby("internal_query_id")
-    }
-    positive_rows = data.train_pairs[
-        data.train_pairs["internal_query_id"].astype(str).isin(negatives_by_query)
-    ].copy()
-    item_text = dict(
-        zip(
-            data.train_items["item_id"].astype(str),
-            data.train_items["text"].astype(str),
-            strict=True,
-        )
-    )
-    if positive_rows.empty:
-        raise ValueError("hard negatives do not overlap train positives")
-    tower_v2 = TwoTowerModel.load(v1_path)
-    losses_v2 = train_two_tower_with_hard_negatives(
-        tower_v2,
-        positive_rows["query_text"].astype(str).tolist(),
-        positive_rows["item_text"].astype(str).tolist(),
-        [
-            [item_text[item_id] for item_id in negatives_by_query[str(query_id)]]
-            for query_id in positive_rows["internal_query_id"].astype(str)
-        ],
-        config=tower_config_obj,
-    )
-    v2_path = root / "two_tower/v2/checkpoint.json"
-    tower_v2.save(v2_path)
 
     generic_validation = _save_embeddings(
         encoder,
@@ -699,12 +702,21 @@ def train_selected(
         model_name,
         revision=model_revision,
         batch_size=encoder_batch_size,
+        text_prefix=dense_item_prefix,
     )
-    tower_v2_validation = _save_tower_embeddings(
-        tower_v2,
+    selected_tower = tower_v1
+    catboost_config = config.values.get("catboost", {})
+    try:
+        catboost_iterations = int(catboost_config.get("iterations", 250))
+        catboost_depth = int(catboost_config.get("depth", 7))
+        catboost_learning_rate = float(catboost_config.get("learning_rate", 0.08))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid CatBoost configuration") from exc
+    tower_v1_validation = _save_tower_embeddings(
+        selected_tower,
         data.validation_items,
-        root / "embeddings/two_tower/v2/validation",
-        "v2",
+        root / "embeddings/two_tower/v1/validation",
+        "v1",
         batch_size=tower_batch_size,
     )
     validation_sources = _retrieve_sources(
@@ -712,11 +724,12 @@ def train_selected(
         data.validation_items,
         encoder,
         generic_validation,
-        tower_v2,
-        tower_v2_validation,
+        selected_tower,
+        tower_v1_validation,
         k,
         encoder_batch_size=encoder_batch_size,
         category_policy=str(selection.get("category_policy", "none")),
+        dense_query_prefix=dense_query_prefix,
     )
     candidate_dir = root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
@@ -725,16 +738,76 @@ def train_selected(
     ):
         frame.to_parquet(candidate_dir / f"{name}.parquet", index=False)
     union = _union(validation_sources)
-    rrf = reciprocal_rank_fusion(
-        cast(pd.DataFrame, pd.concat(validation_sources, ignore_index=True)),
-        rrf_k=rrf_k,
-        limit=k,
+    validation_candidates = cast(
+        pd.DataFrame, pd.concat(validation_sources, ignore_index=True)
+    )
+    selector_features = prepare_selector_features(
+        validation_candidates,
+        missing_rank=k + 1,
+    )
+    validation_pairs = set(
+        zip(
+            data.validation_ground_truth["internal_query_id"].astype(str),
+            data.validation_ground_truth["item_id"].astype(str),
+            strict=True,
+        )
+    )
+    selector_features["label"] = [
+        (str(query_id), str(item_id)) in validation_pairs
+        for query_id, item_id in zip(
+            selector_features["internal_query_id"],
+            selector_features["item_id"],
+            strict=True,
+        )
+    ]
+    tuning_query_ids: set[str] = set()
+    for query_id in data.validation_queries["internal_query_id"].astype(str):
+        try:
+            bucket = (
+                int.from_bytes(
+                    hashlib.sha256(f"catboost:{query_id}".encode()).digest()[:8], "big"
+                )
+                % 5
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid validation query ID") from exc
+        if bucket == 0:
+            tuning_query_ids.add(query_id)
+    tuning_mask = (
+        selector_features["internal_query_id"].astype(str).isin(list(tuning_query_ids))
+    )
+    tuning_features = cast(pd.DataFrame, selector_features.loc[tuning_mask].copy())
+    tuning_labels = set(tuning_features["label"].tolist())
+    if len(tuning_features.index) == 0 or len(tuning_labels) < 2:
+        tuning_features = selector_features
+        tuning_query_ids = set()
+    selector = train_selector(
+        tuning_features,
+        iterations=catboost_iterations,
+        depth=catboost_depth,
+        learning_rate=catboost_learning_rate,
+        random_seed=config.seed,
+    )
+    selector_path = save_selector(selector, root / "fusion/catboost_selector.json")
+    heldout_candidates = cast(
+        pd.DataFrame,
+        validation_candidates.loc[
+            ~validation_candidates["internal_query_id"]
+            .astype(str)
+            .isin(list(tuning_query_ids))
+        ].copy(),
+    )
+    catboost_ranked = rank_with_selector(
+        heldout_candidates,
+        selector,
+        limit=50,
+        missing_rank=k + 1,
     )
     union.to_parquet(candidate_dir / "union.parquet", index=False)
-    rrf.to_parquet(candidate_dir / "rrf.parquet", index=False)
+    catboost_ranked.to_parquet(candidate_dir / "catboost.parquet", index=False)
     metric_payload: dict[str, Any] = {
         "schema_version": 1,
-        "losses": {"v1": losses_v1, "v2": losses_v2},
+        "losses": {"v1": losses_v1},
         "metrics": {},
     }
     for name, frame in [
@@ -742,7 +815,6 @@ def train_selected(
         ("dense", validation_sources[1]),
         ("two_tower", validation_sources[2]),
         ("union", union),
-        ("rrf", rrf),
     ]:
         metric_payload["metrics"][name] = evaluate_candidates(
             frame,
@@ -751,7 +823,30 @@ def train_selected(
             stage=name,
             split="validation",
         )["metrics"]
+    heldout_ground_truth = cast(
+        pd.DataFrame,
+        data.validation_ground_truth.loc[
+            ~data.validation_ground_truth["internal_query_id"]
+            .astype(str)
+            .isin(list(tuning_query_ids))
+        ].copy(),
+    )
+    metric_payload["metrics"]["catboost"] = evaluate_candidates(
+        catboost_ranked,
+        heldout_ground_truth,
+        ks=(50, k),
+        stage="catboost",
+        split="validation-heldout",
+    )["metrics"]
     metrics_path = _write_json(root / "metrics/validation.json", metric_payload)
+    selector = train_selector(
+        selector_features,
+        iterations=catboost_iterations,
+        depth=catboost_depth,
+        learning_rate=catboost_learning_rate,
+        random_seed=config.seed,
+    )
+    selector_path = save_selector(selector, root / "fusion/catboost_selector.json")
 
     benchmark_generic = _save_embeddings(
         encoder,
@@ -760,12 +855,13 @@ def train_selected(
         model_name,
         revision=model_revision,
         batch_size=encoder_batch_size,
+        text_prefix=dense_item_prefix,
     )
-    tower_v2_benchmark = _save_tower_embeddings(
-        tower_v2,
+    tower_v1_benchmark = _save_tower_embeddings(
+        selected_tower,
         data.benchmark_items,
-        root / "embeddings/two_tower/v2/benchmark",
-        "v2",
+        root / "embeddings/two_tower/v1/benchmark",
+        "v1",
         batch_size=tower_batch_size,
     )
     benchmark_sources = _retrieve_sources(
@@ -773,18 +869,23 @@ def train_selected(
         data.benchmark_items,
         encoder,
         benchmark_generic,
-        tower_v2,
-        tower_v2_benchmark,
+        selected_tower,
+        tower_v1_benchmark,
         k,
         encoder_batch_size=encoder_batch_size,
+        category_policy=str(selection.get("category_policy", "none")),
+        dense_query_prefix=dense_query_prefix,
     )
-    benchmark_rrf = reciprocal_rank_fusion(
+    benchmark_catboost = rank_with_selector(
         cast(pd.DataFrame, pd.concat(benchmark_sources, ignore_index=True)),
-        rrf_k=rrf_k,
-        limit=k,
+        selector,
+        limit=50,
+        missing_rank=k + 1,
     )
     query_map = data.benchmark_queries[["internal_query_id", "query_id"]].copy()
-    scored = _frame(benchmark_rrf.merge(query_map, on="internal_query_id", how="left"))
+    scored = _frame(
+        benchmark_catboost.merge(query_map, on="internal_query_id", how="left")
+    )
     scored["final_score"] = scored["score"]
     predictions = rank_predictions(scored, limit=50)
     prediction_path = root / "predictions.parquet"
@@ -801,7 +902,8 @@ def train_selected(
         "dense_model_revision": model_revision,
         "dense_model_path": str(dense_config.get("model_path", model_name)),
         "bm25_index": "lexical/bm25.npz",
-        "two_tower_checkpoint": "two_tower/v2/checkpoint.json",
+        "two_tower_checkpoint": str(v1_path.relative_to(root)),
+        "selector_model": str(selector_path.relative_to(root)),
         "metrics": str(metrics_path.relative_to(root)),
         "predictions": str(prediction_path.relative_to(root)),
         "benchmark_queries": str(benchmark_queries_path),
@@ -816,7 +918,7 @@ def train_selected(
         "PASS",
         ("bm25", "dense", "two_tower"),
         k,
-        "rrf",
+        "catboost",
         "recall@50",
         components,
         config.hash,
