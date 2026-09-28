@@ -432,19 +432,19 @@ def run_submission_generation() -> dict[str, Any]:
             {
                 "item_id": it_id,
                 "title": item_title_dict.get(it_id, ""),
-                "item_location_id": item_loc_map.get(it_id, ""),
-                "item_category_id": item_cat_map.get(it_id, ""),
-                "same_location": item_loc_map.get(it_id) == q_row["search_location_id"],
+                "item_location_id": str(item_loc_map.get(it_id, "")),
+                "item_category_id": str(item_cat_map.get(it_id, "")),
+                "same_location": bool(item_loc_map.get(it_id) == q_row["search_location_id"]),
             }
             for it_id in top10_items
         ]
         audit_records.append({
-            "query_id": qid,
+            "query_id": str(qid),
             "query": str(q_row["search_query"]),
             "filters": str(q_row.get("search_infm_params_text", "")),
             "category": str(q_row.get("search_category", "")),
             "location_id": str(q_row.get("search_location_id", "")),
-            "predicted_top5_microcategories": predicted_cats,
+            "predicted_top5_microcategories": [int(x) for x in predicted_cats],
             "top10_results": top10_details,
         })
 
