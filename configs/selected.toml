@@ -14,7 +14,8 @@ benchmark_items = "data/benchmark_items.parquet"
 source = "catboost"
 retrievers = ["bm25", "dense", "two_tower"]
 category_policy = "none"
-retrieval_k = 200
+retrieval_k = 500
+candidate_pool = "rrf_top500"
 metric = "recall@50"
 fusion = "catboost"
 

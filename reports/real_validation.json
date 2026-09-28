@@ -114,11 +114,12 @@
   "fusion": {
     "rrf_60_heldout_recall@50": 0.497621,
     "rrf_60_full_validation_recall@50": 0.495510,
-    "catboost_oof_heldout_recall@50": 0.506448
+    "catboost_oof_heldout_recall@50": 0.506692,
+    "catboost_full_union_recall@50": 0.505516
   },
   "champion": {
-    "architecture": "BM25 (bm25s) + Multilingual-E5-Base + Two-Tower v1 -> RRF (k=60)",
+    "architecture": "BM25 (bm25s) + Multilingual-E5-Base + Two-Tower v1 -> RRF top-500 -> CatBoost",
     "policy": "none (global retrieval)",
-    "recall@50": 0.497621
+    "recall@50": 0.506692
   }
 }
