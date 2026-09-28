@@ -35,6 +35,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output", default="artifacts/metrics/real_validation.json"
     )
     real_validation.add_argument("--batch-size", type=int, default=256)
+    rerank_val = commands.add_parser("rerank-validation")
+    rerank_val.add_argument("--config", default="configs/selected.toml")
+    rerank_val.add_argument("--subset", type=int, default=500)
+    rerank_val.add_argument("--candidate-k", type=int, default=500)
+    rerank_val.add_argument("--device", default="auto")
+    rerank_val.add_argument("--batch-size", type=int, default=64)
+    rerank_val.add_argument("--cache-dir", default="artifacts/reranker/cache")
+    rerank_val.add_argument(
+        "--output", default="artifacts/metrics/reranker_validation.json"
+    )
+    rerank_val.add_argument("--seed", type=int, default=42)
     validate = commands.add_parser("validate")
     validate.add_argument("--config", default="configs/base.toml")
     canonical = commands.add_parser("canonicalize")
@@ -90,6 +101,21 @@ def main() -> None:
 
         result = run_bm25_validation(
             args.config, output=args.output, batch_size=args.batch_size
+        )
+    elif args.command == "rerank-validation":
+        from avito_candidate_generation.rerank_experiment import (
+            run_reranker_validation,
+        )
+
+        result = run_reranker_validation(
+            args.config,
+            sample_size=args.subset,
+            candidate_k=args.candidate_k,
+            device=args.device,
+            batch_size=args.batch_size,
+            cache_dir=args.cache_dir,
+            output_json=args.output,
+            seed=args.seed,
         )
     elif args.command == "smoke":
         workflow = cast(Any, import_module("avito_candidate_generation.workflow"))
