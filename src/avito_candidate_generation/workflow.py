@@ -628,9 +628,11 @@ def _union_chunked(sources: list[pd.DataFrame], chunk_size: int = 5000) -> pd.Da
 
     parts: list[pd.DataFrame] = []
     for start in range(0, len(all_query_ids), chunk_size):
-        chunk_qids = set(all_query_ids[start : start + chunk_size])
-        chunk_sources = [
-            src[src["internal_query_id"].astype(str).isin(chunk_qids)]
+        chunk_qids = list(all_query_ids[start : start + chunk_size])
+        chunk_sources: list[pd.DataFrame] = [
+            cast(
+                pd.DataFrame, src[src["internal_query_id"].astype(str).isin(chunk_qids)]
+            )
             for src in sources
         ]
         parts.append(_union(chunk_sources))
@@ -661,10 +663,13 @@ def rank_with_selector_chunked(
         )
     parts: list[pd.DataFrame] = []
     for start in range(0, len(all_query_ids), chunk_size):
-        chunk_qids = set(all_query_ids[start : start + chunk_size])
-        chunk_cand = candidates[
-            candidates["internal_query_id"].astype(str).isin(chunk_qids)
-        ].copy()
+        chunk_qids = list(all_query_ids[start : start + chunk_size])
+        chunk_cand = cast(
+            pd.DataFrame,
+            candidates[
+                candidates["internal_query_id"].astype(str).isin(chunk_qids)
+            ].copy(),
+        )
         parts.append(
             rank_with_selector(
                 chunk_cand,
@@ -961,8 +966,12 @@ def train_selected(
     )
 
     if tuning_query_ids:
+        tuning_qids_list = list(tuning_query_ids)
         tuning_sources = [
-            src[src["internal_query_id"].astype(str).isin(tuning_query_ids)].copy()
+            cast(
+                pd.DataFrame,
+                src[src["internal_query_id"].astype(str).isin(tuning_qids_list)].copy(),
+            )
             for src in validation_sources
         ]
         tuning_candidates = pd.concat(tuning_sources, ignore_index=True)
@@ -970,7 +979,7 @@ def train_selected(
         gc.collect()
 
         tuning_features = prepare_selector_features(
-            tuning_candidates,
+            cast(pd.DataFrame, tuning_candidates),
             missing_rank=k + 1,
         )
         del tuning_candidates
@@ -1023,8 +1032,14 @@ def train_selected(
     del tuning_features
     gc.collect()
 
+    tuning_qids_set_list = list(tuning_query_ids)
     heldout_sources = [
-        src[~src["internal_query_id"].astype(str).isin(tuning_query_ids)].copy()
+        cast(
+            pd.DataFrame,
+            src[
+                ~src["internal_query_id"].astype(str).isin(tuning_qids_set_list)
+            ].copy(),
+        )
         for src in validation_sources
     ]
     heldout_candidates = pd.concat(heldout_sources, ignore_index=True)
@@ -1032,7 +1047,7 @@ def train_selected(
     gc.collect()
 
     catboost_ranked = rank_with_selector_chunked(
-        heldout_candidates,
+        cast(pd.DataFrame, heldout_candidates),
         selector,
         limit=50,
         missing_rank=k + 1,

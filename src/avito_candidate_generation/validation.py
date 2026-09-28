@@ -7,7 +7,7 @@ import json
 import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -252,10 +252,11 @@ def run_tfidf_validation(
             raw_queries, ground_truth, sample_size=subset_queries, seed=seed
         )
         queries = _compose_query_text(queries_sample)
-        valid_qids = set(queries["internal_query_id"])
-        ground_truth = ground_truth[
-            ground_truth["internal_query_id"].isin(valid_qids)
-        ].copy()
+        valid_qids = list(set(queries["internal_query_id"]))
+        ground_truth = cast(
+            pd.DataFrame,
+            ground_truth[ground_truth["internal_query_id"].isin(valid_qids)].copy(),
+        )
     else:
         queries = _compose_query_text(raw_queries)
 
@@ -312,7 +313,7 @@ def run_tfidf_validation(
 
     metrics = stream_recall_at_k(
         queries,
-        ground_truth,
+        cast(pd.DataFrame, ground_truth),
         retrieve_batch,
         ks=ks,
         batch_size=batch_size,
@@ -326,7 +327,7 @@ def run_tfidf_validation(
         ),
         "category_policy": category_policy,
         "sublinear_tf": sublinear_tf,
-        "n_queries": ground_truth["internal_query_id"].nunique(),
+        "n_queries": int(cast(pd.Series, ground_truth["internal_query_id"]).nunique()),
         "n_items": len(items),
         "n_relevant": len(ground_truth),
         "candidate_k": max(ks),
