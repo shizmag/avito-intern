@@ -2,146 +2,200 @@
 
 Гибридный candidate generator, оптимизированный по **real cold-item validation Recall@50**.
 
-## Champion
+## TL;DR
+
+- **Цель**: максимизация Recall@50 на отложенных холодных товарах (cold-item split: 43,413 queries, 34,370 items, 46,360 positive pairs).
+- **Архитектура**: три взаимодополняющих ретривера (лексический `bm25s`, семантический `multilingual-e5-base` и предметный `Two-Tower v1`) извлекают по top-500 кандидатов.
+- **Candidate Pool**: Reciprocal Rank Fusion (RRF, $k=60$) формирует промежуточный пул из 500 кандидатов, отсеивая низкопрецизионный шум. Проведённый ablation показал, что подача полного объединения (~1,068 кандидатов) не даёт прироста в Recall@50 (-0.12 pp) из-за наплыва дистракторов.
+- **Селектор**: CatBoost ранжирует 500 кандидатов по табличным признакам рангов и скоров всех источников, выбирая финальные 50 товаров.
+- **Векторный поиск**: точный косинусный поиск (exact chunked search) ввиду компактности офлайн-корпуса; для крупномасштабного продакшена естественным решением был бы ANN-индекс.
+- **Экспериментальные абляции**:
+  - *Two-Tower v2*: hard-negative майнинг на train привёл к коллапсу представлений (Recall@50: 0.2332 $\to$ 0.0165); модель исключена.
+  - *Jina Reranker v2*: тяжёлый zero-shot cross-encoder (278M XLM-RoBERTa) показал катастрофическую деградацию (-45.08 pp vs CatBoost), а его лицензия (**CC-BY-NC-4.0**) не разрешает коммерческое использование. Исключён из release pipeline.
+
+---
+
+## Финальная архитектура (Champion)
 
 ```text
-query
-  ├── bm25s BM25 (top-200)
-  ├── intfloat/multilingual-e5-base, exact cosine search (top-200)
-  └── task-specific Two-Tower v1 (top-200)
-          ↓
-  CatBoost selector
-          ↓
-  deterministic top-50
-          ↓
-  answer.csv
+Query
+  ├── bm25s BM25 (top-500)
+  ├── intfloat/multilingual-e5-base, exact cosine search (top-500)
+  └── task-specific Two-Tower v1 (top-500)
+          │
+          ▼
+  RRF top-500 candidate pool (prunes low-precision distractors)
+          │
+          ▼
+  CatBoost selector (multi-source rank & score tabular features)
+          │
+          ▼
+  deterministic top-50 unique items
+          │
+          ▼
+      answer.csv
 ```
 
 Выбранная конфигурация: [`configs/selected.toml`](configs/selected.toml).
 
 - BM25 backend: `bm25s==0.2.14`, Robertson formulation;
-- dense: `intfloat/multilingual-e5-base`, revision `d128750597153bb5987e10b1c3493a34e5a4502a`;
+- Dense bi-encoder: `intfloat/multilingual-e5-base`, revision `d128750597153bb5987e10b1c3493a34e5a4502a`;
 - E5 prefixes: `query: ` / `passage: `;
-- dense search: exact, без ANN/vector DB;
-- Two-Tower: v1 checkpoint; hard-negative v2 измерен, но исключён из champion из-за сильной регрессии;
-- fusion: CatBoost, выбран по disjoint held-out Recall@50;
-- category policy: `none` — см. ограничение validation ниже.
+- Dense search: exact chunked search, без приближённого ANN;
+- Two-Tower: checkpoint v1 (32-dim, contrastive in-batch negatives);
+- Candidate pool: RRF top-500 ($k=60$, limit=500);
+- Fusion: CatBoost classifier (`iterations=250`, `depth=7`, `learning_rate=0.08`), обученный на OOF признаках;
+- Category policy: `none` (глобальный поиск, обоснование см. ниже).
 
-## Real validation
+---
 
-Split: deterministic cold-item validation, 43,413 queries, 34,370 items, 46,360 positive pairs. Primary metric — query-mean Recall@50.
+## Результаты валидации
 
-### Category sanity check
+Split: детерминированная валидация на холодных товарах (43,413 queries, 34,370 items, 46,360 positive pairs).  
+Основная метрика: query-mean **Recall@50**.
 
-- containment recall: **0.999849** (46,353 / 46,360 positive pairs);
-- searchable items/query: mean **34,365.42**, median **34,367**, p95 **34,367**;
-- validation category distribution is collapsed: 43,411 / 43,413 queries and 34,367 / 34,370 items have category `114`;
-- global and pre-retrieval category-filtered BM25 therefore have identical R@50 (**0.400648**).
+### Сводная таблица методов и абляций
 
-Итог: `category_policy = "none"`. Hard filtering корректно реализован до retrieval, но supplied validation не позволяет честно доказать его пользу из-за почти константной category.
+| Компонент / Пайплайн | Роль в исследовании | Recall@10 | Recall@20 | Recall@50 | Recall@200 | Recall@500 |
+|---|---|---:|---:|---:|---:|---:|
+| **bm25s BM25** | Ретривер (лексический) | 0.182624 | 0.262741 | 0.400648 | 0.653759 | 0.789355 |
+| **multilingual-e5-base** | Ретривер (семантический) | 0.203814 | 0.283120 | 0.441962 | 0.691567 | 0.818169 |
+| **Two-Tower v1** | Ретривер (предметный) | 0.064044 | 0.114154 | 0.233249 | 0.564581 | 0.775725 |
+| **Two-Tower v2 (Hard-neg)** | Отрицательная абляция | 0.003921 | 0.007542 | 0.016511 | 0.048362 | 0.104670 |
+| **RRF-60 Baseline** | Базовый fusion | 0.210333 | 0.326333 | 0.497621 | — | — |
+| **Jina Reranker v2** | Zero-shot cross-encoder | 0.016000 | 0.030000 | 0.084286 | —\* | —\* |
+| **CatBoost + Jina Hybrid** | Таблично-нейросетевой hybrid | 0.146185 | 0.244578 | 0.409639 | —\* | —\* |
+| **CatBoost over Full Union** | Эксперимент candidate pool | 0.235020 | 0.334929 | 0.505516 | —\* | —\* |
+| **CatBoost over RRF-500** | **Selected Champion** | **0.236905** | **0.336181** | **0.506692** | —\* | —\* |
 
-### Retriever ablation
+*\* Примечание: селекторы и реранкеры ранжируют кандидатов и возвращают ровно top-50 на запрос. Значения Recall@100 и Recall@200 для них физически не измерялись, так как вывод ограничен 50 позициями.*
 
-| Retriever | R@50 | R@200 | R@500 |
+---
+
+## Финальный эксперимент: RRF top-500 vs Full Generator Union
+
+Было проведено прямое apples-to-apples сравнение двух режимов формирования пула кандидатов перед подачей в CatBoost (8,784 обучающих запроса, 34,629 тестовых held-out запросов):
+
+```text
+Вариант A (Champion):
+BM25 top500 + Dense top500 + Two-Tower top500 → RRF top-500 → CatBoost → top-50
+
+Вариант B (Ablation):
+BM25 top500 + Dense top500 + Two-Tower top500 → Deduplicated Full Union (~1500) → CatBoost → top-50
+```
+
+### Метрики пулов кандидатов и качество ранжирования
+
+| Метрика пула / качества | Exp A (RRF top-500) | Exp B (Full Union) | Delta (B - A) |
 |---|---:|---:|---:|
-| bm25s BM25 | 0.400648 | 0.653759 | 0.789355 |
-| MiniLM dense baseline | 0.163485 | 0.310752 | 0.437451 |
-| multilingual-e5-base | **0.441962** | **0.691567** | **0.818169** |
-| Two-Tower v1 | 0.233249 | 0.564581 | 0.775725 |
-| Two-Tower v2 hard-negative | 0.016511 | 0.048362 | 0.104670 |
+| Candidate count: mean | 500.0 | 1,067.95 | +567.95 |
+| Candidate count: p50 | 500.0 | 1,062.00 | +562.00 |
+| Candidate count: p95 | 500.0 | 1,424.00 | +924.00 |
+| Candidate count: max | 500 | 1,495 | +995 |
+| **Candidate pool coverage (oracle recall)** | **0.908784** (90.88%) | **0.956225** (95.62%) | **+4.74 pp** |
+| Held-out Recall@10 | 0.236905 | 0.235020 | -0.001885 (-0.19 pp) |
+| Held-out Recall@20 | 0.336181 | 0.334929 | -0.001252 (-0.13 pp) |
+| **Held-out Recall@50** | **0.506692** | **0.505516** | **-0.001176 (-0.12 pp)** |
+| Paired bootstrap 95% CI | — | — | **[-0.003174, +0.000784]** |
 
-TT v2 mined 293,022 leakage-safe BM25 negatives on train only; quality collapsed, so model is an ablation artifact, not selected component.
+### Решение по правилу остановки (Decision Rule)
 
-### True oracle candidate-pool coverage
+Правило: переход на Full Union требовал воспроизводимого выигрыша $\ge +0.5$ процентных пункта Recall@50.
+Фактический результат: **-0.12 п.п.** (доверительный интервал включает 0 и строго лежит ниже порога).
 
-`union@K` means full union of top-K **per source**; pool is not truncated back to K.
+**Вывод**: увеличение пула кандидатов до полного объединения расширяет теоретический потолок (oracle coverage с 90.88% до 95.62%), однако добавляет ~568 низкопрецизионных кандидатов-дистракторов на запрос. CatBoost не способен надежно отличить эти дальние кандидаты от релевантных без потери точности в top-50.  
+**Пайплайн RRF top-500 $\to$ CatBoost окончательно заморожен в качестве Champion.**
 
-| Pool | Oracle R@50 | Oracle R@200 | Oracle R@500 |
-|---|---:|---:|---:|
-| BM25 ∪ E5 | 0.593522 | 0.834357 | 0.926154 |
-| BM25 ∪ TT v1 | 0.503002 | 0.792455 | 0.908846 |
-| E5 ∪ TT v1 | 0.545293 | 0.817313 | 0.923452 |
-| BM25 ∪ E5 ∪ TT v1 | **0.653883** | **0.885474** | **0.957110** |
+---
 
-### Complementarity
+## Отрицательные эксперименты и абляции
 
-Positive pairs recovered beyond BM25:
+### 1. Two-Tower v2 (Hard-negative fine-tuning)
+- **Идея**: дообучение двухбашенной модели с использованием майнинга сложных негативов через BM25 на train-сплите (293,022 пары).
+- **Результат**: катастрофическая деградация представлений (Recall@50 упал с **0.2332** до **0.0165**).
+- **Статус**: исключена из пайплайна, оставлена как воспроизводимый артефакт абляции.
 
-| Recovery | K=50 | K=200 | K=500 |
-|---|---:|---:|---:|
-| BM25 misses recovered by E5 | 8,847 | 8,404 | 6,338 |
-| BM25 misses recovered by TT v1 | 4,776 | 6,529 | 5,609 |
-| BM25+TT misses recovered by E5 | 6,906 | 4,305 | 2,198 |
+### 2. Jina Multilingual Reranker v2 (Zero-shot Cross-Encoder)
+- **Идея**: применение тяжёлого 278M XLM-RoBERTa cross-encoder (`jina-reranker-v2-base-multilingual`) для реранкинга top-500 кандидатов.
+- **Результат**: Recall@50 составил всего **0.084286** (-45.08 п.п. по сравнению с CatBoost). При расширении глубины входа со 100 до 500 кандидатов качество реранкинга падало (0.0937 $\to$ 0.0843), что указывает на чувствительность к шуму.
+- **Гипотезы причин**:
+  1. *Domain shift*: модель предобучена на веб-документах и не калибрована под специфику российских e-commerce объявлений и артикулов.
+  2. *Verbosity bias*: кросс-внимание отдаёт предпочтение длинным описаниям с общими словами перед краткими техническими заголовками.
+  3. *Отсутствие табличных сигналов*: cross-encoder не использует согласованность рангов и силы скоров ретриверов.
+- **Лицензия**: модель распространяется под некоммерческой лицензией **CC-BY-NC-4.0**, что юридически запрещает коммерческое внедрение.
+- **Статус**: полностью исключена из финального инференса. Подробный отчёт: [`reports/reranker_validation.md`](reports/reranker_validation.md).
 
-Single-positive query quadrants at K=500 (41,401 queries):
+---
 
-- BM25 hit / E5 hit: 28,161;
-- BM25 hit / E5 miss: 4,494;
-- **BM25 miss / E5 hit: 5,680**;
-- BM25 miss / E5 miss: 3,066.
+## Лицензии и open-source disclosure
 
-### Fusion selection
+Все компоненты, входящие в финальный champion пайплайн, используют коммерчески разрешительные open-source лицензии:
 
-RRF small grid selected `rrf_k=60`. On its held-out validation subset RRF R@50 = **0.497621**.
+| Компонент | Репозиторий / Модель | Лицензия | Роль в системе |
+|---|---|---|---|
+| **bm25s** | `bm25s==0.2.14` | **MIT** | Быстрый лексический ретривер (Robertson BM25) |
+| **multilingual-e5-base** | `intfloat/multilingual-e5-base` | **MIT** | Семантический dense bi-encoder |
+| **Two-Tower v1** | Custom PyTorch code (`src/.../two_tower.py`) | **PyTorch: BSD-3-Clause / Код: MIT** | Предметный двухбашенный ретривер холодных товаров |
+| **CatBoost** | `catboost` | **Apache-2.0** | Табличный селектор и ранжировщик кандидатов |
 
-CatBoost was justified by the large oracle gap. Leak-safe protocol: deterministic 20% query split trains selector; disjoint 80% evaluates it. Paired comparison on the same 34,629 held-out queries:
+**Исключённые экспериментальные компоненты**:
+- **Jina Reranker v2** (`jinaai/jina-reranker-v2-base-multilingual`): **CC-BY-NC-4.0 (Non-Commercial)**. Оставлен исключительно как исследовательский артефакт в `reports/`. Runtime-пайплайн не требует его весов и не загружает модель.
 
-| Fusion | Recall@50 |
-|---|---:|
-| RRF-60 | 0.489331 |
-| CatBoost | **0.506448** |
+---
 
-Paired delta: **+0.017117**, bootstrap 95% CI **[+0.014231, +0.020074]**. CatBoost is selected.
+## Воспроизводимость и запуск (Quick Start)
 
-## Artifacts
-
-Key machine-readable evidence (generated, gitignored):
-
-- `artifacts/real_validation/category_policy_validation.json`
-- `artifacts/real_validation/dense_e5_base_validation.json`
-- `artifacts/real_validation/two_tower_v1_validation.json`
-- `artifacts/real_validation/two_tower_v2_validation.json`
-- `artifacts/real_validation/union_validation_v2.json`
-- `artifacts/real_validation/rrf_selection.json`
-- `artifacts/real_validation/catboost_validation.json`
-- `artifacts/real_validation/fusion_paired_comparison.json`
-- `artifacts/selected/manifest.json`
-- `artifacts/selected/predictions.parquet`
-- `answer.csv`
-
-Every experiment artifact records split/model/data fingerprints where applicable. `answer.csv` contains exactly 50 unique known items for each of 2,452 benchmark queries.
-
-## Commands
+### 1. Окружение и тесты
 
 ```bash
+# Синхронизация зависимостей
 uv sync --extra dev
+
+# Полный CI (ruff, pyright, pytest coverage >= 65%)
 make ci
-.venv/bin/python -m avito_candidate_generation.verify --scope release
+
+# Строгий release-верификатор (проверяет артефакты, манифест, answer.csv)
+uv run avito verify --scope release
 ```
 
-Selected workflow:
+### 2. Обучение и инференс
 
 ```bash
-.venv/bin/python -m avito_candidate_generation.cli train-selected \
-  --config configs/selected.toml
-.venv/bin/python -m avito_candidate_generation.cli predict-selected \
-  --manifest artifacts/selected/manifest.json \
-  --output answer.csv
+# Обучение и сборка финального пайплайна
+uv run avito train --config configs/selected.toml
+
+# Генерация финального сабмишна answer.csv
+uv run avito predict --manifest artifacts/selected/manifest.json --output answer.csv
 ```
 
-## Reproducibility and contracts
+---
 
-- seed: 42;
-- stable item-ID tie-breaking;
-- no train/validation item overlap;
-- exact dense search in bounded query batches;
-- BM25 returns unique known IDs and supports deterministic save/load;
-- hard category filtering, when enabled, happens before retrieval;
-- oracle union coverage is separate from fused Recall@K;
-- train-only hard-negative mining removes all known positives;
-- selector validation is disjoint from selector training;
-- `answer.csv` is independently round-trip validated.
+## Финальный сабмишн: answer.csv
 
-## Known data limitation
+Финальный файл `answer.csv` проходит независимую валидацию контракта:
+- Формат: строго `query_id,answer` в UTF-8 без BOM и без индексной колонки;
+- Количество запросов: ровно **2,452** бенчмарк-запроса, каждый ровно 1 раз;
+- Порядок запросов: полностью совпадает с `benchmark_queries.parquet`;
+- Кандидаты: ровно **50 уникальных товаров** на запрос (разделитель — одинарный пробел);
+- Валидность ID: 0 неизвестных товаров (все 100% присутствуют в `benchmark_items.parquet`);
+- Дубликаты внутри строки: 0.
 
-The supplied validation corpus is highly category-collapsed (`114`). Category containment is high, but this split cannot establish the expected speed/quality benefit of category partitioning on a naturally diverse category distribution. The selected global policy is therefore evidence-based for this validation set, not a universal product recommendation.
+Результат независимого валидатора:
+```json
+{
+  "status": "PASS",
+  "counts": {
+    "rows": 2452,
+    "empty_answers": 0,
+    "min_candidates": 50,
+    "max_candidates": 50
+  },
+  "sha256": "dcd2aeadb5d70fc3103e7e70ec56bee5dbdfea52ae898f91084e29cd559d0be3"
+}
+```
+
+---
+
+## Известные ограничения данных
+
+Валидационная выборка имеет схлопнутое распределение категорий (`114` у 99.99% запросов и товаров). По этой причине параметр `category_policy = "none"` выбран на основе честных измерений на предоставленных данных. Фильтрация по категориям реализована в кодовой базе и готова к включению при наличии естественного категориального разнообразия в продакшене.
