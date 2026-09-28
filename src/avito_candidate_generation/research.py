@@ -73,9 +73,7 @@ def context_folds(
         raise ValueError("folds must be >= 2 and seed must be non-negative")
     unique = sorted({str(value) for value in context_ids})
     bucket = [
-        int.from_bytes(
-            hashlib.sha256(f"{seed}:{value}".encode()).digest()[:8], "big"
-        )
+        int.from_bytes(hashlib.sha256(f"{seed}:{value}".encode()).digest()[:8], "big")
         % folds
         for value in unique
     ]
@@ -110,7 +108,9 @@ def build_research_validation(
     """
     required_train = set(CONTEXT_COLUMNS) | {"item_id", "item_microcat_id"}
     if not required_train.issubset(train.columns):
-        raise ValueError(f"train missing {sorted(required_train.difference(train.columns))}")
+        raise ValueError(
+            f"train missing {sorted(required_train.difference(train.columns))}"
+        )
     required_items = {"item_id", "item_microcat_id"}
     if not required_items.issubset(benchmark_items.columns):
         raise ValueError(
@@ -144,20 +144,23 @@ def build_research_validation(
     positives["internal_query_id"] = positives["internal_query_id"].astype(str)
     positives["item_id"] = positives["item_id"].astype(str)
     positives = positives.drop_duplicates()
-    positives = cast(Any, positives[
-        positives["item_id"].isin(list(benchmark_ids))
-    ].copy())
+    positives = cast(
+        Any, positives[positives["item_id"].isin(list(benchmark_ids))].copy()
+    )
     positives = cast(Any, positives.copy())
     positives["train_item_microcat_id"] = cast(Any, positives.pop("item_microcat_id"))
     benchmark_microcats = benchmark_items[["item_id", "item_microcat_id"]].copy()
     benchmark_microcats.columns = ["item_id", "benchmark_item_microcat_id"]
-    positives = cast(Any, pd.merge(
-        cast(pd.DataFrame, positives),
-        benchmark_microcats,
-        on="item_id",
-        how="left",
-        validate="many_to_one",
-    ))
+    positives = cast(
+        Any,
+        pd.merge(
+            cast(pd.DataFrame, positives),
+            benchmark_microcats,
+            on="item_id",
+            how="left",
+            validate="many_to_one",
+        ),
+    )
     if bool(positives["benchmark_item_microcat_id"].isna().any()):
         raise ValueError("benchmark positive has missing microcategory")
 
@@ -165,11 +168,10 @@ def build_research_validation(
     positive_counts: Any = pd.DataFrame(
         {
             "internal_query_id": positives["internal_query_id"].drop_duplicates(),
-            "known_positive_count": positives.groupby("internal_query_id")[
-                "item_id"
-            ].nunique().reindex(
-                positives["internal_query_id"].drop_duplicates()
-            ).to_numpy(),
+            "known_positive_count": positives.groupby("internal_query_id")["item_id"]
+            .nunique()
+            .reindex(positives["internal_query_id"].drop_duplicates())
+            .to_numpy(),
         }
     )
     validation_contexts = pd.merge(
@@ -203,20 +205,16 @@ def build_research_validation(
         "train_positive_rows_in_train_fold": train_positive_rows,
         "fingerprints": {
             "train": canonical_fingerprint(
-            cast(pd.DataFrame, train[list(CONTEXT_COLUMNS) + ["item_id"]])
-        ),
+                cast(pd.DataFrame, train[list(CONTEXT_COLUMNS) + ["item_id"]])
+            ),
             "benchmark_items": canonical_fingerprint(
                 cast(pd.DataFrame, benchmark_items)
             ),
-            "context_folds": canonical_fingerprint(
-                cast(pd.DataFrame, folds_frame)
-            ),
+            "context_folds": canonical_fingerprint(cast(pd.DataFrame, folds_frame)),
             "validation_contexts": canonical_fingerprint(
                 cast(pd.DataFrame, validation_contexts)
             ),
-            "ground_truth": canonical_fingerprint(
-                cast(pd.DataFrame, ground_truth)
-            ),
+            "ground_truth": canonical_fingerprint(cast(pd.DataFrame, ground_truth)),
         },
     }
     return ResearchValidation(
@@ -273,8 +271,12 @@ def query_text(frame: pd.DataFrame, *, include_location: bool = True) -> list[st
             f"category_{normalize_research_text(row['search_category'])}",
         ]
         if include_location:
-            parts.append(f"location_{normalize_research_text(row['search_location_id'])}")
-            parts.append(f"delivery_{normalize_research_text(row['search_is_delivery_search'])}")
+            parts.append(
+                f"location_{normalize_research_text(row['search_location_id'])}"
+            )
+            parts.append(
+                f"delivery_{normalize_research_text(row['search_is_delivery_search'])}"
+            )
         result.append(" ".join(part for part in parts if part))
     return result
 
@@ -333,7 +335,9 @@ class SparseRetrievalIndex:
         matrix = vectorizer.fit_transform(list(texts)).tocsr()
         return cls([str(value) for value in item_ids], vectorizer, matrix, name)
 
-    def top_k(self, texts: Sequence[str], *, k: int, batch_size: int = 64) -> list[list[tuple[str, float]]]:
+    def top_k(
+        self, texts: Sequence[str], *, k: int, batch_size: int = 64
+    ) -> list[list[tuple[str, float]]]:
         if k < 1 or batch_size < 1:
             raise ValueError("k and batch_size must be positive")
         if not texts:
@@ -362,7 +366,9 @@ class SparseRetrievalIndex:
                 ranked.sort(key=lambda pair: (-pair[1], pair[0]))
                 seen = {item_id for item_id, _ in ranked}
                 if len(ranked) < count:
-                    ranked.extend((item_id, 0.0) for item_id in all_ids if item_id not in seen)
+                    ranked.extend(
+                        (item_id, 0.0) for item_id in all_ids if item_id not in seen
+                    )
                 result.append(ranked[:count])
         return result
 
@@ -426,7 +432,11 @@ class SparseRetrievalIndex:
 
 
 def numeric_rank(
-    queries: Sequence[str], item_texts: Sequence[str], item_ids: Sequence[str], *, k: int
+    queries: Sequence[str],
+    item_texts: Sequence[str],
+    item_ids: Sequence[str],
+    *,
+    k: int,
 ) -> list[list[tuple[str, float]]]:
     """Retrieve by exact canonical number overlap, with deterministic ties."""
     inverted: dict[str, list[int]] = {}
@@ -441,7 +451,10 @@ def numeric_rank(
             for index in inverted.get(number, []):
                 counts[index] = counts.get(index, 0) + 1
         ranked = sorted(
-            ((str(item_ids[index]), count / max(len(query_numbers), 1)) for index, count in counts.items()),
+            (
+                (str(item_ids[index]), count / max(len(query_numbers), 1))
+                for index, count in counts.items()
+            ),
             key=lambda pair: (-pair[1], pair[0]),
         )
         output.append(ranked[:k])
@@ -483,9 +496,7 @@ def ranking_metrics(
             except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
                 raise ValueError("invalid ranking metric input") from exc
     try:
-        return {
-            f"recall@{k}": sums[k] / len(query_ids) for k in unique_ks
-        }
+        return {f"recall@{k}": sums[k] / len(query_ids) for k in unique_ks}
     except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
         raise ValueError("invalid ranking metric input") from exc
 
@@ -508,12 +519,14 @@ def union_rankings(
         for source_weight, ranking in zip(weights, per_query, strict=True):
             for rank, (item_id, _score) in enumerate(ranking, start=1):
                 try:
-                    scores[str(item_id)] = scores.get(str(item_id), 0.0) + float(source_weight) * (
-                        1.0 / (60.0 + rank)
-                    )
+                    scores[str(item_id)] = scores.get(str(item_id), 0.0) + float(
+                        source_weight
+                    ) * (1.0 / (60.0 + rank))
                 except (TypeError, ValueError, ZeroDivisionError) as exc:
                     raise ValueError("invalid union score") from exc
-        output.append(sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))[:limit])
+        output.append(
+            sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))[:limit]
+        )
     return output
 
 
@@ -557,8 +570,7 @@ def oracle_union_metrics(
             for source in rankings:
                 try:
                     union.update(
-                        str(item_id)
-                        for item_id, _ in source[query_index][: int(k)]
+                        str(item_id) for item_id, _ in source[query_index][: int(k)]
                     )
                 except (IndexError, TypeError, ValueError) as exc:
                     raise ValueError("invalid union ranking") from exc
@@ -566,7 +578,9 @@ def oracle_union_metrics(
                 values[int(k)].append(len(union & expected) / len(expected))
             except (KeyError, ZeroDivisionError) as exc:
                 raise ValueError("invalid union metric input") from exc
-    return {f"union_recall@{k}": sum(scores) / len(scores) for k, scores in values.items()}
+    return {
+        f"union_recall@{k}": sum(scores) / len(scores) for k, scores in values.items()
+    }
 
 
 def fingerprint_file(path: str | Path) -> str:

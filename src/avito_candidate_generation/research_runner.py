@@ -164,12 +164,14 @@ def _microcategory_predictions(
         p95_size = sorted_sizes[p95_index] if sorted_sizes else 0
         top_k_report[str(top_k)] = {
             "category_hit_recall": sum(category_hits) / max(len(category_hits), 1),
-            "positive_item_containment": sum(item_containment) / max(len(item_containment), 1),
+            "positive_item_containment": sum(item_containment)
+            / max(len(item_containment), 1),
             "corpus_size_mean": sum(corpus_sizes) / max(len(corpus_sizes), 1),
             "corpus_size_median": median_size,
             "corpus_size_p95": p95_size,
             "corpus_size_max": max(corpus_sizes, default=0),
-            "route_fraction": sum(corpus_sizes) / max(len(corpus_sizes) * len(benchmark_items), 1),
+            "route_fraction": sum(corpus_sizes)
+            / max(len(corpus_sizes) * len(benchmark_items), 1),
         }
     return (
         {
@@ -180,13 +182,17 @@ def _microcategory_predictions(
             ),
             "evaluation_contexts": len(evaluation_contexts),
             "seen_search_query_fraction": sum(
-                1 for value in evaluation_contexts["search_query"].astype(str).tolist()
+                1
+                for value in evaluation_contexts["search_query"].astype(str).tolist()
                 if value in seen_queries
-            ) / max(len(evaluation_contexts), 1),
+            )
+            / max(len(evaluation_contexts), 1),
             "top_k": top_k_report,
         },
         route_sets,
     )
+
+
 def _historical_intent_rankings(
     train: pd.DataFrame,
     query_frame: pd.DataFrame,
@@ -207,11 +213,20 @@ def _historical_intent_rankings(
     )
     work = cast(
         pd.DataFrame,
-        pd.merge(work, folds_frame, on="internal_query_id", how="left", validate="many_to_one"),
+        pd.merge(
+            work,
+            folds_frame,
+            on="internal_query_id",
+            how="left",
+            validate="many_to_one",
+        ),
     )
     train_rows = work[work["fold"] == train_fold].copy()
     if train_rows.empty:
-        return ([[] for _ in query_ids], {"status": "NOT_RUN", "reason": "empty train fold"})
+        return (
+            [[] for _ in query_ids],
+            {"status": "NOT_RUN", "reason": "empty train fold"},
+        )
 
     train_rows_frame = cast(pd.DataFrame, train_rows)
     context_columns = [*CONTEXT_COLUMNS, "internal_query_id"]
@@ -233,7 +248,9 @@ def _historical_intent_rankings(
     historical_queries = field_text(
         query_frame, ("search_query", "search_infm_params_text")
     )
-    nearest = train_index.top_k(historical_queries, k=min(20, len(train_contexts)), batch_size=batch_size)
+    nearest = train_index.top_k(
+        historical_queries, k=min(20, len(train_contexts)), batch_size=batch_size
+    )
     positive_item_ids = (
         train_rows.groupby("internal_query_id")["item_id"]
         .apply(lambda values: set(values.astype(str)))
@@ -241,9 +258,7 @@ def _historical_intent_rankings(
     )
     benchmark_ids = set(benchmark_items["item_id"].astype(str).tolist())
     positive_item_ids = {
-        historical_id: {
-            item_id for item_id in item_ids if item_id in benchmark_ids
-        }
+        historical_id: {item_id for item_id in item_ids if item_id in benchmark_ids}
         for historical_id, item_ids in positive_item_ids.items()
     }
     rankings: list[list[tuple[str, float]]] = []
@@ -262,9 +277,7 @@ def _historical_intent_rankings(
                 raise ValueError("invalid historical neighbor score") from exc
             for item_id in historical_items:
                 scores[item_id] = scores.get(item_id, 0.0) + weight
-        ranking = sorted(
-            scores.items(), key=lambda pair: (-pair[1], pair[0])
-        )[:k]
+        ranking = sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))[:k]
         rankings.append(ranking)
     recovered_from_history = sum(
         1
@@ -315,7 +328,10 @@ def run_research(
     validation = build_research_validation(
         train, benchmark_items, seed=seed, train_fold=train_fold, folds=folds
     )
-    print(f"[research] validation built: {len(validation.validation_contexts):,} contexts, {len(validation.ground_truth):,} GT pairs", flush=True)
+    print(
+        f"[research] validation built: {len(validation.validation_contexts):,} contexts, {len(validation.ground_truth):,} GT pairs",
+        flush=True,
+    )
     for name, frame in {
         "train_contexts": validation.train_contexts,
         "validation_contexts": validation.validation_contexts,
@@ -343,7 +359,10 @@ def run_research(
     query_ids = query_frame["internal_query_id"].astype(str).tolist()
     relevant = {query_id: relevant[query_id] for query_id in query_ids}
 
-    print(f"[research] microcategory routing: {len(query_frame):,} eval contexts", flush=True)
+    print(
+        f"[research] microcategory routing: {len(query_frame):,} eval contexts",
+        flush=True,
+    )
     microcat_report, route_sets = _microcategory_predictions(
         train,
         query_frame,
@@ -373,7 +392,13 @@ def run_research(
     for name, texts, index_queries, analyzer, ngrams in (
         ("query_title_word", title_text, query_only, "word", (1, 2)),
         ("query_title_char", title_text, query_only, "char_wb", (3, 5)),
-        ("query_title_params_word", title_params_text, query_with_params, "word", (1, 2)),
+        (
+            "query_title_params_word",
+            title_params_text,
+            query_with_params,
+            "word",
+            (1, 2),
+        ),
         ("query_description_word", description_text, query_only, "word", (1, 2)),
         ("filters_params_word", params_text, filters, "word", (1, 2)),
     ):
@@ -447,9 +472,7 @@ def run_research(
         "historical_intent",
     ]
     print("[research] lexical union", flush=True)
-    lexical_union = union_rankings(
-        [sources[name] for name in lexical_names], limit=k
-    )
+    lexical_union = union_rankings([sources[name] for name in lexical_names], limit=k)
     source_metrics["lexical_union_rrf"] = _evaluate_source(
         lexical_union, query_ids, relevant, candidate_k=k
     )
@@ -464,9 +487,7 @@ def run_research(
     dense_baseline: dict[str, Any] = {"status": "NOT_AVAILABLE"}
     if baseline_path.is_file():
         try:
-            dense_baseline = json.loads(
-                baseline_path.read_text(encoding="utf-8")
-            )
+            dense_baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("invalid dense baseline artifact") from exc
 

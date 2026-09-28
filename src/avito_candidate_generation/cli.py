@@ -101,6 +101,13 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--submission", type=Path)
     verify.add_argument("--queries", type=Path)
     verify.add_argument("--items", type=Path)
+    ans = commands.add_parser(
+        "answer", help="Generate final verified competition submission answer.csv"
+    )
+    ans.add_argument("--output", type=Path, default=Path("answer.csv"))
+    ans.add_argument("--routing-k", type=int, default=10)
+    ans.add_argument("--dist-decay", type=float, default=0.25)
+    ans.add_argument("--same-loc-bonus", type=float, default=30.0)
     return parser
 
 
@@ -214,6 +221,15 @@ def main() -> None:
                 seed=args.seed,
             ).items()
         }
+    elif args.command == "answer":
+        from avito_candidate_generation.answer_pipeline import generate_champion_answer
+
+        result = generate_champion_answer(
+            output_path=args.output,
+            routing_k=args.routing_k,
+            dist_decay=args.dist_decay,
+            same_loc_bonus=args.same_loc_bonus,
+        )
     elif args.command == "verify" and args.submission is not None:
         from avito_candidate_generation.submission import validate_submission
 

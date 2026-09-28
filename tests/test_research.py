@@ -43,9 +43,7 @@ def test_normalization_and_numbers_are_deterministic() -> None:
 
 
 def test_context_folds_are_deterministic() -> None:
-    assert context_folds(["b", "a"], seed=42).equals(
-        context_folds(["a", "b"], seed=42)
-    )
+    assert context_folds(["b", "a"], seed=42).equals(context_folds(["a", "b"], seed=42))
 
 
 def test_research_validation_uses_full_context_and_full_benchmark_corpus() -> None:
@@ -62,11 +60,11 @@ def test_research_validation_uses_full_context_and_full_benchmark_corpus() -> No
         _train(), _items(), seed=42, train_fold=1 - banana_fold, folds=2
     )
     assert len(validation.benchmark_items) == 4
-    assert {"a" * 16, "b" * 16}.issubset(
-        set(validation.ground_truth["item_id"])
-    )
+    assert {"a" * 16, "b" * 16}.issubset(set(validation.ground_truth["item_id"]))
     assert validation.protocol["unknown_interactions_are_not_negatives"] is True
-    assert validation.ground_truth.duplicated(["internal_query_id", "item_id"]).sum() == 0
+    assert (
+        validation.ground_truth.duplicated(["internal_query_id", "item_id"]).sum() == 0
+    )
 
 
 def test_query_text_uses_only_query_side_fields() -> None:
@@ -104,4 +102,6 @@ def test_union_is_not_truncated_before_requested_limit() -> None:
 
 def test_ground_truth_rejects_duplicates() -> None:
     with pytest.raises(ValueError, match="duplicate"):
-        ground_truth_map(pd.DataFrame({"internal_query_id": ["q", "q"], "item_id": ["i", "i"]}))
+        ground_truth_map(
+            pd.DataFrame({"internal_query_id": ["q", "q"], "item_id": ["i", "i"]})
+        )
