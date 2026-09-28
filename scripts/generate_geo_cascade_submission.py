@@ -289,10 +289,16 @@ def run_submission_generation() -> dict[str, Any]:
     gc.collect()
 
     # 4. Dense E5 Retrieval (k=1000)
-    print("\n[4/6] Dense E5 Retrieval (Encoding & Search)...")
+    print("\n[4/6] Dense E5 Retrieval (Loading embeddings & Search)...")
     t0 = time.time()
-    encoder = E5QueryEncoder()
-    benchmark_query_embeddings = encoder.encode(query_text_list, batch_size=64)
+    query_emb_file = Path("artifacts/research/benchmark_query_e5_embeddings.npy")
+    if query_emb_file.is_file():
+        print(f"Loading precomputed benchmark query embeddings from {query_emb_file}...")
+        benchmark_query_embeddings = np.load(query_emb_file)
+    else:
+        print("Encoding benchmark queries with E5...")
+        encoder = E5QueryEncoder()
+        benchmark_query_embeddings = encoder.encode(query_text_list, batch_size=64)
 
     e5_items_json = [
         str(x)
@@ -361,7 +367,16 @@ def run_submission_generation() -> dict[str, Any]:
             boosted.append((item_id, final_sc))
 
         boosted.sort(key=lambda p: (-p[1], p[0]))
-        final_top50_rankings.append([it for it, _ in boosted[:50]])
+        top50 = [it for it, _ in boosted[:50]]
+        if len(top50) < 50:
+            seen_items = set(top50)
+            for it in item_id_list:
+                if it not in seen_items:
+                    top50.append(it)
+                    seen_items.add(it)
+                    if len(top50) == 50:
+                        break
+        final_top50_rankings.append(top50)
 
     print(f"Cascade ranking complete in {time.time() - t0:.1f}s")
 
