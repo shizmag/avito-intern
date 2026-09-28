@@ -52,11 +52,7 @@ def train_selector(
         raise RuntimeError("CatBoost fusion requires catboost dependency") from exc
     import os
 
-    threads = (
-        thread_count
-        if thread_count is not None
-        else min(os.cpu_count() or 4, 8)
-    )
+    threads = thread_count if thread_count is not None else min(os.cpu_count() or 4, 8)
     model = CatBoostClassifier(
         iterations=iterations,
         depth=depth,

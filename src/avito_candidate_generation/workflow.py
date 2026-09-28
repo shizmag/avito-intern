@@ -619,9 +619,7 @@ def rank_with_selector(
     ).reset_index(drop=True)
 
 
-def _union_chunked(
-    sources: list[pd.DataFrame], chunk_size: int = 5000
-) -> pd.DataFrame:
+def _union_chunked(sources: list[pd.DataFrame], chunk_size: int = 5000) -> pd.DataFrame:
     all_query_ids = list(
         dict.fromkeys(sources[0]["internal_query_id"].astype(str).tolist())
     )
@@ -822,11 +820,7 @@ def train_selected(
     v1_path = root / "two_tower/v1/checkpoint.json"
     tt_train_dir = root / "embeddings/two_tower/v1/train"
     losses_v1: list[float] = []
-    if (
-        resume
-        and v1_path.is_file()
-        and (tt_train_dir / "embeddings.npy").is_file()
-    ):
+    if resume and v1_path.is_file() and (tt_train_dir / "embeddings.npy").is_file():
         print(
             f"\n[3/8] Reusing existing Two-Tower v1 checkpoint from {v1_path}",
             flush=True,
@@ -855,7 +849,9 @@ def train_selected(
             "v1",
             batch_size=tower_batch_size,
         )
-        print(f"  ✓ Two-Tower v1 checkpoint saved [{time.time() - t0:.1f}s]", flush=True)
+        print(
+            f"  ✓ Two-Tower v1 checkpoint saved [{time.time() - t0:.1f}s]", flush=True
+        )
 
     # [4/8] Validation items
     val_dense_dir = root / "embeddings/generic/validation"
@@ -874,7 +870,7 @@ def train_selected(
         and (val_tt_dir / "embeddings.npy").is_file()
     ):
         print(
-            f"\n[4/8] Reusing existing validation item embeddings",
+            "\n[4/8] Reusing existing validation item embeddings",
             flush=True,
         )
         generic_validation = load_embedding_artifact(val_dense_dir)
@@ -906,7 +902,9 @@ def train_selected(
     # [5/8] Validation candidates
     candidate_dir = root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    candidate_files = [candidate_dir / f"{name}.parquet" for name in ("bm25", "dense", "two_tower")]
+    candidate_files = [
+        candidate_dir / f"{name}.parquet" for name in ("bm25", "dense", "two_tower")
+    ]
     if resume and all(f.is_file() for f in candidate_files):
         print(
             f"\n[5/8] Reusing existing validation candidates from {candidate_dir}",
@@ -931,7 +929,9 @@ def train_selected(
             category_policy=str(selection.get("category_policy", "none")),
             dense_query_prefix=dense_query_prefix,
         )
-        print(f"  ✓ Validation candidates retrieved [{time.time() - t0:.1f}s]", flush=True)
+        print(
+            f"  ✓ Validation candidates retrieved [{time.time() - t0:.1f}s]", flush=True
+        )
         for name, frame in zip(
             ("bm25", "dense", "two_tower"), validation_sources, strict=True
         ):
@@ -988,9 +988,15 @@ def train_selected(
     else:
         tuning_labels = set()
 
-    if not tuning_query_ids or len(tuning_features.index) == 0 or len(tuning_labels) < 2:
+    if (
+        not tuning_query_ids
+        or len(tuning_features.index) == 0
+        or len(tuning_labels) < 2
+    ):
         all_val_candidates = pd.concat(validation_sources, ignore_index=True)
-        tuning_features = prepare_selector_features(all_val_candidates, missing_rank=k + 1)
+        tuning_features = prepare_selector_features(
+            all_val_candidates, missing_rank=k + 1
+        )
         tuning_features["label"] = [
             (str(query_id), str(item_id)) in validation_pairs
             for query_id, item_id in zip(

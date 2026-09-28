@@ -17,7 +17,7 @@ def describe_table(frame: pd.DataFrame) -> dict[str, Any]:
     except (TypeError, ValueError) as exc:
         raise ValueError("unable to describe table") from exc
     return {
-        "rows": int(len(frame)),
+        "rows": len(frame),
         "columns": [str(c) for c in frame.columns],
         "nulls": nulls,
         "duplicates": duplicates,

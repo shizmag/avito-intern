@@ -8,7 +8,7 @@ import platform
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +78,7 @@ def write_manifest(
     started_at: str | None = None,
     finished_at: str | None = None,
 ) -> Path:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     manifest = {
         "schema_version": 1,
         "stage": context.stage,

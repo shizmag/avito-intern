@@ -88,7 +88,7 @@ def validate_negatives(
         raise ValueError("hard negative references unknown item_id")
     try:
         n_unique_q = int(negatives["internal_query_id"].nunique())  # pyright: ignore[reportArgumentType]
-        n_total = int(len(negatives))
+        n_total = len(negatives)
         max_q = int(per_query.max()) if not per_query.empty else 0  # pyright: ignore[reportArgumentType]
     except (TypeError, ValueError) as exc:
         raise ValueError("unable to compute negative statistics") from exc
