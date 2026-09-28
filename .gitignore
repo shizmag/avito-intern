@@ -12,3 +12,5 @@ reports/generated/
 answer.csv
 .DS_Store
 .coverage
+catboost_info/
+*.egg-info/
