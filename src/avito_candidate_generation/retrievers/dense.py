@@ -60,14 +60,34 @@ def encode_texts(
     if batch_size < 1:
         raise ValueError("batch_size must be positive")
     chunks: list[np.ndarray] = []
-    for start in range(0, len(texts), batch_size):
-        batch = texts[start : start + batch_size]
-        values = np.asarray(
-            encoder.encode(batch, batch_size=batch_size), dtype=np.float32
-        )
-        if values.ndim != 2 or values.shape[0] != len(batch):
-            raise ValueError("encoder returned invalid shape")
-        chunks.append(values)
+    pbar = None
+    if len(texts) > batch_size * 2:
+        try:
+            from tqdm import tqdm
+
+            pbar = tqdm(
+                total=len(texts),
+                desc="[Dense E5] Encoding texts",
+                unit="text",
+                dynamic_ncols=True,
+                leave=False,
+            )
+        except Exception:
+            pbar = None
+    try:
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start : start + batch_size]
+            values = np.asarray(
+                encoder.encode(batch, batch_size=batch_size), dtype=np.float32
+            )
+            if values.ndim != 2 or values.shape[0] != len(batch):
+                raise ValueError("encoder returned invalid shape")
+            chunks.append(values)
+            if pbar is not None:
+                pbar.update(len(batch))
+    finally:
+        if pbar is not None:
+            pbar.close()
     result = np.vstack(chunks) if chunks else np.empty((0, 0), dtype=np.float32)
     if not np.isfinite(result).all():
         raise ValueError("encoder returned non-finite embeddings")
@@ -208,6 +228,18 @@ def build_embedding_artifact_streaming(
     temporary.mkdir(parents=True, exist_ok=True)
     matrix: np.memmap | None = None
     dimension = 0
+    pbar = None
+    try:
+        from tqdm import tqdm
+
+        pbar = tqdm(
+            total=len(texts),
+            desc=f"[Dense E5] {target.name}",
+            unit="item",
+            dynamic_ncols=True,
+        )
+    except Exception:
+        pbar = None
     try:
         for start in range(0, len(texts), batch_size):
             batch = texts[start : start + batch_size]
@@ -236,6 +268,8 @@ def build_embedding_artifact_streaming(
                     raise ValueError("zero embedding cannot be normalized")
                 values = values / norms
             matrix[start : start + len(batch)] = values
+            if pbar is not None:
+                pbar.update(len(batch))
         if matrix is None:
             raise ValueError("encoder returned no embeddings")
         matrix.flush()
@@ -269,6 +303,9 @@ def build_embedding_artifact_streaming(
         if temporary.exists():
             shutil.rmtree(temporary)
         raise
+    finally:
+        if pbar is not None:
+            pbar.close()
     return load_embedding_artifact(target)
 
 

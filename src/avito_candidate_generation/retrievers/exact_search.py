@@ -93,48 +93,68 @@ def iter_exact_top_k(
         query_ids,
         source,
     )
-    for start in range(0, len(query_embeddings), batch_size):
-        query_batch = query_embeddings[start : start + batch_size]
-        candidates: list[list[tuple[int, float]]] = [
-            [] for _ in range(len(query_batch))
-        ]
-        for item_start in range(0, len(item_embeddings), item_batch_size):
-            item_end = min(item_start + item_batch_size, len(item_embeddings))
-            scores_batch = query_batch @ item_embeddings[item_start:item_end].T
-            if not np.isfinite(scores_batch).all():
-                raise ValueError("invalid dense similarity scores")
-            local_ids = item_ids[item_start:item_end]
-            local_k = min(k, len(local_ids))
-            for offset, scores in enumerate(scores_batch):
-                local_order = _stable_top_indices(scores, local_ids, local_k)
-                try:
-                    candidates[offset].extend(
-                        (item_start + index, float(scores[index]))
-                        for index in local_order
-                    )
-                except (IndexError, TypeError, ValueError) as exc:
-                    raise ValueError("invalid dense similarity scores") from exc
-                candidates[offset] = sorted(
-                    candidates[offset],
-                    key=lambda pair: (-pair[1], str(item_ids[pair[0]])),
-                )[:k]
-        rows: list[tuple[str, str, float, int]] = []
-        for offset, pairs in enumerate(candidates):
-            rows.extend(
-                (ids[start + offset], str(item_ids[index]), score, rank)
-                for rank, (index, score) in enumerate(pairs, 1)
+    pbar = None
+    if len(query_embeddings) > batch_size * 2:
+        try:
+            from tqdm import tqdm
+
+            pbar = tqdm(
+                total=len(query_embeddings),
+                desc=f"[{source}] Exact top-{k} search",
+                unit="query",
+                dynamic_ncols=True,
+                leave=False,
             )
-        result = pd.DataFrame(
-            rows, columns=["internal_query_id", "item_id", "score", "rank"]
-        )
-        result["source"] = source
-        output = cast(
-            pd.DataFrame,
-            result.loc[
-                :, ["internal_query_id", "item_id", "source", "score", "rank"]
-            ].copy(),
-        )
-        yield output
+        except Exception:
+            pbar = None
+    try:
+        for start in range(0, len(query_embeddings), batch_size):
+            query_batch = query_embeddings[start : start + batch_size]
+            candidates: list[list[tuple[int, float]]] = [
+                [] for _ in range(len(query_batch))
+            ]
+            for item_start in range(0, len(item_embeddings), item_batch_size):
+                item_end = min(item_start + item_batch_size, len(item_embeddings))
+                scores_batch = query_batch @ item_embeddings[item_start:item_end].T
+                if not np.isfinite(scores_batch).all():
+                    raise ValueError("invalid dense similarity scores")
+                local_ids = item_ids[item_start:item_end]
+                local_k = min(k, len(local_ids))
+                for offset, scores in enumerate(scores_batch):
+                    local_order = _stable_top_indices(scores, local_ids, local_k)
+                    try:
+                        candidates[offset].extend(
+                            (item_start + index, float(scores[index]))
+                            for index in local_order
+                        )
+                    except (IndexError, TypeError, ValueError) as exc:
+                        raise ValueError("invalid dense similarity scores") from exc
+                    candidates[offset] = sorted(
+                        candidates[offset],
+                        key=lambda pair: (-pair[1], str(item_ids[pair[0]])),
+                    )[:k]
+            rows: list[tuple[str, str, float, int]] = []
+            for offset, pairs in enumerate(candidates):
+                rows.extend(
+                    (ids[start + offset], str(item_ids[index]), score, rank)
+                    for rank, (index, score) in enumerate(pairs, 1)
+                )
+            result = pd.DataFrame(
+                rows, columns=["internal_query_id", "item_id", "score", "rank"]
+            )
+            result["source"] = source
+            output = cast(
+                pd.DataFrame,
+                result.loc[
+                    :, ["internal_query_id", "item_id", "source", "score", "rank"]
+                ].copy(),
+            )
+            if pbar is not None:
+                pbar.update(len(query_batch))
+            yield output
+    finally:
+        if pbar is not None:
+            pbar.close()
 
 
 def exact_top_k(

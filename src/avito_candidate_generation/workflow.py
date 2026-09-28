@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -490,6 +491,11 @@ def _retrieve_sources(
     category_policy: str = "none",
     dense_query_prefix: str = "",
 ) -> list[pd.DataFrame]:
+    print(
+        f"  -> [BM25] Retrieving top-{k} candidates for {len(queries):,} queries...",
+        flush=True,
+    )
+    t0 = time.time()
     bm25 = retrieve_bm25(
         queries,
         items,
@@ -497,6 +503,13 @@ def _retrieve_sources(
         category_policy=category_policy,
         item_category_column="item_category_id",
     )
+    print(f"     ✓ BM25 done in {time.time() - t0:.1f}s", flush=True)
+
+    print(
+        f"  -> [Dense E5] Encoding queries & exact top-{k} search...",
+        flush=True,
+    )
+    t0 = time.time()
     dense = exact_top_k(
         encode_texts(
             encoder,
@@ -509,6 +522,13 @@ def _retrieve_sources(
         query_ids=queries["internal_query_id"].tolist(),
         source="dense",
     )
+    print(f"     ✓ Dense E5 search done in {time.time() - t0:.1f}s", flush=True)
+
+    print(
+        f"  -> [Two-Tower] Encoding queries & exact top-{k} search...",
+        flush=True,
+    )
+    t0 = time.time()
     tower_candidates = exact_top_k(
         tower.encode_queries(queries["text"].tolist(), batch_size=encoder_batch_size),
         tower_items.embeddings,
@@ -517,6 +537,7 @@ def _retrieve_sources(
         query_ids=queries["internal_query_id"].tolist(),
         source="two_tower",
     )
+    print(f"     ✓ Two-Tower search done in {time.time() - t0:.1f}s", flush=True)
     return [bm25, dense, tower_candidates]
 
 
@@ -645,15 +666,36 @@ def train_selected(
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid selected retrieval configuration") from exc
 
+    t_start = time.time()
+    print("=" * 70, flush=True)
+    print("Avito Candidate Generation: Training Champion Pipeline", flush=True)
+    print(f"Config: {config_path}", flush=True)
+    print(f"Artifact root: {root}", flush=True)
+    print("=" * 70, flush=True)
+
     lexical_dir = root / "lexical"
     lexical_dir.mkdir(parents=True, exist_ok=True)
+    print(
+        f"\n[1/8] Fitting BM25 index on {len(data.train_items):,} train items...",
+        flush=True,
+    )
+    t0 = time.time()
     BM25Index.fit(data.train_items).save(lexical_dir / "bm25.npz")
+    print(
+        f"  ✓ BM25 index saved to {lexical_dir / 'bm25.npz'} [{time.time() - t0:.1f}s]",
+        flush=True,
+    )
     try:
         encoder_batch_size = int(dense_config.get("batch_size", 32))
         tower_batch_size = int(tower_config.get("encode_batch_size", 256))
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid encoder batch-size configuration") from exc
     model_revision = str(dense_config.get("revision", "unknown"))
+    print(
+        f"\n[2/8] Encoding {len(data.train_items):,} train items with Dense E5...",
+        flush=True,
+    )
+    t0 = time.time()
     _ = _save_embeddings(
         encoder,
         data.train_items,
@@ -663,6 +705,7 @@ def train_selected(
         batch_size=encoder_batch_size,
         text_prefix=dense_item_prefix,
     )
+    print(f"  ✓ Train items encoded [{time.time() - t0:.1f}s]", flush=True)
     try:
         tower_config_obj = TrainingConfig(
             seed=config.seed,
@@ -676,6 +719,11 @@ def train_selected(
         tower_vocab_size = int(tower_config.get("vocab_size", 65537))
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid two-tower configuration") from exc
+    print(
+        f"\n[3/8] Training Two-Tower v1 on {len(data.train_pairs):,} interaction pairs...",
+        flush=True,
+    )
+    t0 = time.time()
     tower_v1 = TwoTowerModel(
         tower_dimension, seed=config.seed, vocab_size=tower_vocab_size
     )
@@ -694,7 +742,13 @@ def train_selected(
         "v1",
         batch_size=tower_batch_size,
     )
+    print(f"  ✓ Two-Tower v1 checkpoint saved [{time.time() - t0:.1f}s]", flush=True)
 
+    print(
+        f"\n[4/8] Encoding {len(data.validation_items):,} validation items...",
+        flush=True,
+    )
+    t0 = time.time()
     generic_validation = _save_embeddings(
         encoder,
         data.validation_items,
@@ -719,6 +773,12 @@ def train_selected(
         "v1",
         batch_size=tower_batch_size,
     )
+    print(f"  ✓ Validation items encoded [{time.time() - t0:.1f}s]", flush=True)
+    print(
+        f"\n[5/8] Retrieving validation candidates for {len(data.validation_queries):,} queries (k={k})...",
+        flush=True,
+    )
+    t0 = time.time()
     validation_sources = _retrieve_sources(
         data.validation_queries,
         data.validation_items,
@@ -731,6 +791,7 @@ def train_selected(
         category_policy=str(selection.get("category_policy", "none")),
         dense_query_prefix=dense_query_prefix,
     )
+    print(f"  ✓ Validation candidates retrieved [{time.time() - t0:.1f}s]", flush=True)
     candidate_dir = root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
     for name, frame in zip(
@@ -781,6 +842,11 @@ def train_selected(
     if len(tuning_features.index) == 0 or len(tuning_labels) < 2:
         tuning_features = selector_features
         tuning_query_ids = set()
+    print(
+        f"\n[6/8] Training CatBoost selector on {len(tuning_features):,} candidate pairs...",
+        flush=True,
+    )
+    t0 = time.time()
     selector = train_selector(
         tuning_features,
         iterations=catboost_iterations,
@@ -847,7 +913,16 @@ def train_selected(
         random_seed=config.seed,
     )
     selector_path = save_selector(selector, root / "fusion/catboost_selector.json")
+    print(
+        f"  ✓ CatBoost selector trained and validation metrics written [{time.time() - t0:.1f}s]",
+        flush=True,
+    )
 
+    print(
+        f"\n[7/8] Encoding {len(data.benchmark_items):,} benchmark items...",
+        flush=True,
+    )
+    t0 = time.time()
     benchmark_generic = _save_embeddings(
         encoder,
         data.benchmark_items,
@@ -864,6 +939,13 @@ def train_selected(
         "v1",
         batch_size=tower_batch_size,
     )
+    print(f"  ✓ Benchmark items encoded [{time.time() - t0:.1f}s]", flush=True)
+
+    print(
+        f"\n[8/8] Generating benchmark candidates and predictions for {len(data.benchmark_queries):,} queries...",
+        flush=True,
+    )
+    t0 = time.time()
     benchmark_sources = _retrieve_sources(
         data.benchmark_queries,
         data.benchmark_items,
@@ -890,6 +972,10 @@ def train_selected(
     predictions = rank_predictions(scored, limit=50)
     prediction_path = root / "predictions.parquet"
     predictions.to_parquet(prediction_path, index=False)
+    print(
+        f"  ✓ Benchmark predictions written to {prediction_path} [{time.time() - t0:.1f}s]",
+        flush=True,
+    )
     data_config = _data_config(config)
     benchmark_queries_path = _data_path(
         config, data_config, "benchmark_queries", ("validation_queries", "queries")
@@ -924,7 +1010,16 @@ def train_selected(
         config.hash,
         git_info(config.root).get("commit"),
     )
-    return FinalPipeline(root, manifest).save_manifest(components)
+    pipeline_res = FinalPipeline(root, manifest).save_manifest(components)
+    total_mins = (time.time() - t_start) / 60.0
+    print("\n" + "=" * 70, flush=True)
+    print(
+        f"✓ All pipeline stages completed successfully in {total_mins:.1f} minutes",
+        flush=True,
+    )
+    print(f"✓ Manifest saved to {root / 'manifest.json'}", flush=True)
+    print("=" * 70, flush=True)
+    return pipeline_res
 
 
 def evaluate_selected(manifest_path: str | Path) -> dict[str, float]:
@@ -949,4 +1044,7 @@ def predict_selected(manifest_path: str | Path, *, output_csv: str | Path) -> Pa
     predictions = _component(path.parent, str(components["predictions"]))
     queries = Path(str(components["benchmark_queries"]))
     items = Path(str(components["benchmark_items"]))
-    return write_submission(predictions, queries, items, Path(output_csv))
+    print(f"Generating submission: {predictions} -> {output_csv}...", flush=True)
+    res = write_submission(predictions, queries, items, Path(output_csv))
+    print(f"✓ Submission written to {res}", flush=True)
+    return res

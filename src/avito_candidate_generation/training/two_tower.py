@@ -86,26 +86,47 @@ def train_two_tower(
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
     losses: list[float] = []
     for epoch in range(config.epochs):
-        for batch_indices in deterministic_batches(
-            len(queries), config.batch_size, config.seed + epoch
-        ):
-            try:
-                indices = [int(index) for index in batch_indices]
-                q = [queries[index] for index in indices]
-                i = [items[index] for index in indices]
-            except (IndexError, TypeError, ValueError) as exc:
-                raise ValueError("invalid training batch indices") from exc
-            optimizer.zero_grad(set_to_none=True)
-            logits = model(q, i) / config.temperature
-            labels = torch.arange(len(q), device=logits.device)
-            loss = nn.functional.cross_entropy(logits, labels)
-            loss.backward()
-            optimizer.step()
-            try:
-                loss_value = loss.detach().cpu().item()
-                losses.append(float(loss_value))
-            except (AttributeError, TypeError, ValueError) as exc:
-                raise ValueError("training loss is not scalar") from exc
+        batches = list(
+            deterministic_batches(len(queries), config.batch_size, config.seed + epoch)
+        )
+        pbar = None
+        try:
+            from tqdm import tqdm
+
+            pbar = tqdm(
+                batches,
+                desc=f"[Two-Tower] Epoch {epoch + 1}/{config.epochs}",
+                unit="batch",
+                dynamic_ncols=True,
+                leave=False,
+            )
+        except Exception:
+            pbar = None
+        iterable = pbar if pbar is not None else batches
+        try:
+            for batch_indices in iterable:
+                try:
+                    indices = [int(index) for index in batch_indices]
+                    q = [queries[index] for index in indices]
+                    i = [items[index] for index in indices]
+                except (IndexError, TypeError, ValueError) as exc:
+                    raise ValueError("invalid training batch indices") from exc
+                optimizer.zero_grad(set_to_none=True)
+                logits = model(q, i) / config.temperature
+                labels = torch.arange(len(q), device=logits.device)
+                loss = nn.functional.cross_entropy(logits, labels)
+                loss.backward()
+                optimizer.step()
+                try:
+                    loss_value = loss.detach().cpu().item()
+                    losses.append(float(loss_value))
+                    if pbar is not None:
+                        pbar.set_postfix({"loss": f"{loss_value:.4f}"})
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise ValueError("training loss is not scalar") from exc
+        finally:
+            if pbar is not None:
+                pbar.close()
     return losses
 
 

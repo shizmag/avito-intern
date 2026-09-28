@@ -123,16 +123,37 @@ class TwoTowerModel(nn.Module):
         was_training = self.training
         self.eval()
         chunks: list[np.ndarray] = []
-        with torch.inference_mode():
-            for start in range(0, len(values), batch_size):
-                chunk = (
-                    self._encode_tensor(values[start : start + batch_size], tower)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .astype(np.float32)
+        pbar = None
+        if len(values) > batch_size * 4:
+            try:
+                from tqdm import tqdm
+
+                pbar = tqdm(
+                    total=len(values),
+                    desc="[Two-Tower] Encoding texts",
+                    unit="text",
+                    dynamic_ncols=True,
+                    leave=False,
                 )
-                chunks.append(chunk)
+            except Exception:
+                pbar = None
+        try:
+            with torch.inference_mode():
+                for start in range(0, len(values), batch_size):
+                    batch_vals = values[start : start + batch_size]
+                    chunk = (
+                        self._encode_tensor(batch_vals, tower)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .astype(np.float32)
+                    )
+                    chunks.append(chunk)
+                    if pbar is not None:
+                        pbar.update(len(batch_vals))
+        finally:
+            if pbar is not None:
+                pbar.close()
         self.train(was_training)
         if not chunks:
             return np.empty((0, self.dimension), dtype=np.float32)
@@ -170,15 +191,29 @@ class TwoTowerModel(nn.Module):
         )
         was_training = self.training
         self.eval()
+        pbar = None
+        try:
+            from tqdm import tqdm
+
+            pbar = tqdm(
+                total=len(item_batch),
+                desc="[Two-Tower] Encoding items",
+                unit="item",
+                dynamic_ncols=True,
+                leave=False,
+            )
+        except Exception:
+            pbar = None
         try:
             with torch.inference_mode():
                 for start in range(0, len(item_batch), batch_size):
-                    values = self._encode_tensor(
-                        item_batch[start : start + batch_size], self.item_tower
-                    )
+                    batch_vals = item_batch[start : start + batch_size]
+                    values = self._encode_tensor(batch_vals, self.item_tower)
                     result[start : start + len(values)] = (
                         values.detach().cpu().numpy().astype(np.float32)
                     )
+                    if pbar is not None:
+                        pbar.update(len(batch_vals))
             result.flush()
             del result
             if target.exists():
@@ -189,6 +224,8 @@ class TwoTowerModel(nn.Module):
                 temporary.unlink()
             raise
         finally:
+            if pbar is not None:
+                pbar.close()
             self.train(was_training)
         return np.load(target, mmap_mode="r")
 
