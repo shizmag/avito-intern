@@ -203,12 +203,14 @@ class GeneralizingClassifierPredictor:
         seed: int = 42,
         alpha: float = 1e-5,
         min_df: int = 1,
+        max_features: int | None = None,
         sublinear_tf: bool = True,
     ) -> None:
         self.seed = seed
         self.alpha = alpha
         self.min_df = min_df
         self.sublinear_tf = sublinear_tf
+        self.max_features = max_features
         self.classifier = (
             classifier
             if classifier is not None
@@ -216,6 +218,8 @@ class GeneralizingClassifierPredictor:
                 loss="log_loss",
                 penalty="l2",
                 alpha=alpha,
+                max_iter=25,
+                tol=1e-3,
                 random_state=seed,
             )
         )
@@ -223,12 +227,14 @@ class GeneralizingClassifierPredictor:
             ngram_range=(1, 2),
             analyzer="word",
             min_df=min_df,
+            max_features=max_features,
             sublinear_tf=sublinear_tf,
         )
         self.char_vectorizer = TfidfVectorizer(
             ngram_range=(3, 5),
             analyzer="char_wb",
             min_df=min_df,
+            max_features=max_features,
             sublinear_tf=sublinear_tf,
         )
         self.classes_: list[str] = []
