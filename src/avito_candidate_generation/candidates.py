@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd
-
 
 CANDIDATE_COLUMNS = ("internal_query_id", "item_id", "source", "score", "rank")
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+
 import pandas as pd
 
 
@@ -43,7 +44,12 @@ def verify_oof(table: pd.DataFrame, *, folds: int = 3) -> dict[str, int | bool]:
         positives = int((table["label"] == 1).sum())
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("invalid OOF labels") from exc
-    return {"rows": len(table), "folds": len(actual), "positives": positives, "status": True}
+    return {
+        "rows": len(table),
+        "folds": len(actual),
+        "positives": positives,
+        "status": True,
+    }
 
 
 def main() -> None:

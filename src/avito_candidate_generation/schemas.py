@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import pandas as pd
 
@@ -97,7 +97,9 @@ def validate_domains(
                 invalid = ((frame[column].notna()) & pd.isna(values)).sum()
                 diagnostics[f"{column}_invalid"] = int(invalid)
             except (TypeError, ValueError) as exc:
-                raise SchemaError(f"unable to validate numeric column {column}") from exc
+                raise SchemaError(
+                    f"unable to validate numeric column {column}"
+                ) from exc
     if "search_is_delivery_search" in frame:
         bad = (
             ~frame["search_is_delivery_search"].isin([0, 1])

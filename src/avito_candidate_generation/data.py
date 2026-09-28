@@ -16,8 +16,8 @@ from .schemas import (
     BENCHMARK_QUERIES_CONTRACT,
     ITEM_REQUIRED,
     QUERY_REQUIRED,
-    SchemaError,
     TRAIN_CONTRACT,
+    SchemaError,
     validate_domains,
 )
 

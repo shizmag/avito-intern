@@ -10,6 +10,9 @@ class FixtureDenseEncoder:
 
     def encode(self, texts: Sequence[str], *, batch_size: int) -> np.ndarray:
         return np.asarray(
-            [[float(len(text)), float(sum(ord(char) for char in text) % 97 + 1)] for text in texts],
+            [
+                [float(len(text)), float(sum(ord(char) for char in text) % 97 + 1)]
+                for text in texts
+            ],
             dtype=np.float32,
         )

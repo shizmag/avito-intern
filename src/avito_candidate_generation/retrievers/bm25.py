@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-import json
-import logging
 
 import bm25s
 import numpy as np
@@ -37,7 +37,10 @@ class BM25Index:
     def fit(cls, items: pd.DataFrame, text_column: str = "text") -> BM25Index:
         return cls(
             item_ids=items["item_id"].astype(str).tolist(),
-            documents=[tuple(tokenize(value)) for value in items[text_column].fillna("").astype(str)],
+            documents=[
+                tuple(tokenize(value))
+                for value in items[text_column].fillna("").astype(str)
+            ],
         )
 
     def score(self, query: Sequence[str], document: tuple[str, ...]) -> float:
@@ -91,10 +94,12 @@ class BM25Index:
         source: str = "bm25",
     ) -> pd.DataFrame:
         rows: list[tuple[str, str, str, float, int]] = []
-        for query_text, query_id in queries[[query_column, "internal_query_id"]].itertuples(
-            index=False, name=None
-        ):
-            ranked = self._retrieve_one(str(query_text) if query_text is not None else "", k)
+        for query_text, query_id in queries[
+            [query_column, "internal_query_id"]
+        ].itertuples(index=False, name=None):
+            ranked = self._retrieve_one(
+                str(query_text) if query_text is not None else "", k
+            )
             rows.extend(
                 (str(query_id), item_id, source, score, rank)
                 for rank, (item_id, score) in enumerate(ranked, start=1)
@@ -129,7 +134,9 @@ class BM25Index:
         try:
             if not target.is_dir():
                 raise ValueError("BM25 index artifact must be a directory")
-            metadata = json.loads((target / "metadata.json").read_text(encoding="utf-8"))
+            metadata = json.loads(
+                (target / "metadata.json").read_text(encoding="utf-8")
+            )
             index = BM25Index.__new__(BM25Index)
             index.item_ids = [str(value) for value in metadata["item_ids"]]
             index.documents = [tuple(value) for value in metadata["documents"]]
@@ -171,9 +178,15 @@ def retrieve_bm25(
         )
     }
     rows: list[pd.DataFrame] = []
-    for category, group in queries.groupby(query_category_column, sort=False, dropna=False):
-        category_key = None if category is None or str(category) == "nan" else str(category)
-        category_index = category_indexes.get(category_key) if category_key is not None else None
+    for category, group in queries.groupby(
+        query_category_column, sort=False, dropna=False
+    ):
+        category_key = (
+            None if category is None or str(category) == "nan" else str(category)
+        )
+        category_index = (
+            category_indexes.get(category_key) if category_key is not None else None
+        )
         if category_index is None:
             if category_policy == "hard":
                 continue

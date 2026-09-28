@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+
 from avito_candidate_generation.training.hard_negatives import (
     mine_hard_negatives,
     validate_negatives,

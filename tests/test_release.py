@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+
 from avito_candidate_generation.experiments import ExperimentRegistry, ExperimentResult
 from avito_candidate_generation.inference import rank_predictions
 from avito_candidate_generation.pipeline import FinalPipeline

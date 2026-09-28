@@ -1,12 +1,12 @@
 import numpy as np
 import pandas as pd
-from avito_candidate_generation.validation import stream_exact_recall_at_k
 
 from avito_candidate_generation.retrievers.dense import (
     build_embedding_artifact,
     load_embedding_artifact,
     save_embedding_artifact,
 )
+from avito_candidate_generation.validation import stream_exact_recall_at_k
 
 
 class FakeEncoder:

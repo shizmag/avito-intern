@@ -1,7 +1,9 @@
 """Benchmark prediction schema and deterministic top-50 inference helper."""
+
 from __future__ import annotations
 
 from pathlib import Path
+
 import pandas as pd
 
 
@@ -22,7 +24,9 @@ def rank_predictions(candidates: pd.DataFrame, *, limit: int = 50) -> pd.DataFra
     work = work.drop_duplicates(["query_id", "item_id"], keep="first")
     work = work.groupby("query_id", group_keys=False).head(limit).copy()
     work["rank"] = work.groupby("query_id").cumcount() + 1
-    result = work[["query_id", "item_id", "rank", "final_score", "rrf_score"]].reset_index(drop=True)
+    result = work[
+        ["query_id", "item_id", "rank", "final_score", "rrf_score"]
+    ].reset_index(drop=True)
     return pd.DataFrame(result)
 
 
