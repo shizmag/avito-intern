@@ -161,12 +161,15 @@ uv run avito verify --scope release
 ### 2. Обучение и инференс
 
 ```bash
-# Обучение и сборка финального пайплайна
+# Обучение и сборка финального пайплайна с нуля (~1.5–2 часа на CPU/Apple Silicon,
+# так как включает нейросетевое кодирование сотен тысяч товаров multilingual-E5-base)
 uv run avito train --config configs/selected.toml
 
-# Генерация финального сабмишна answer.csv
+# Мгновенная генерация финального сабмишна answer.csv из готовых артефактов (~2 секунды)
 uv run avito predict --manifest artifacts/selected/manifest.json --output answer.csv
 ```
+
+> **Примечание**: все финальные веса, манифесты и предсказания уже сгенерированы и зафиксированы в `artifacts/selected/`. Повторный запуск `avito train` требуется только для воспроизведения обучения с нуля. Для проверки и формирования сабмишна достаточно `avito predict` и `avito verify`.
 
 ---
 
