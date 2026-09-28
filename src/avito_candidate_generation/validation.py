@@ -15,6 +15,7 @@ import pandas as pd
 from .config import load_config
 from .retrievers.bm25 import BM25Index
 from .retrievers.exact_search import exact_top_k
+from .retrievers.tfidf import TFIDFIndex
 from .workflow import _compose_item_text, _compose_query_text, _prepare_workflow_paths
 
 
@@ -219,6 +220,120 @@ def run_bm25_validation(
         "metrics": metrics,
         "config_hash": config.hash,
         "reason": "BM25-only real validation; neural ablations not run by this command",
+    }
+    target = Path(output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_json(target, payload)
+    _write_metric_csv(target.with_suffix(".csv"), payload)
+    return payload
+
+
+def run_tfidf_validation(
+    config_path: str | Path = "configs/selected.toml",
+    *,
+    output: str | Path = "artifacts/metrics/tfidf_validation.json",
+    subset_queries: int | None = 1000,
+    ks: Sequence[int] = (50, 100, 150, 200, 250, 300, 350, 400, 450, 500),
+    batch_size: int = 256,
+    sublinear_tf: bool = True,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Run TF-IDF validation with configurable query subset and Recall@K steps."""
+    config = load_config(config_path)
+    paths = _prepare_workflow_paths(config, config.values["data"])
+    raw_queries = pd.read_parquet(paths["validation_queries"])
+    ground_truth = pd.read_parquet(paths["validation_ground_truth"])
+    items = _compose_item_text(pd.read_parquet(paths["validation_items"]))
+
+    if subset_queries is not None and 0 < subset_queries < len(raw_queries):
+        from .rerank_experiment import sample_representative_queries
+
+        queries_sample = sample_representative_queries(
+            raw_queries, ground_truth, sample_size=subset_queries, seed=seed
+        )
+        queries = _compose_query_text(queries_sample)
+        valid_qids = set(queries["internal_query_id"])
+        ground_truth = ground_truth[
+            ground_truth["internal_query_id"].isin(valid_qids)
+        ].copy()
+    else:
+        queries = _compose_query_text(raw_queries)
+
+    category_policy = str(
+        config.values.get("selection", {}).get("category_policy", "none")
+    )
+    if category_policy not in {"none", "hard", "fallback"}:
+        raise ValueError("category_policy must be one of none, hard, fallback")
+
+    global_index = TFIDFIndex.fit(items, sublinear_tf=sublinear_tf)
+    category_indexes = (
+        {
+            str(category): TFIDFIndex.fit(group, sublinear_tf=sublinear_tf)
+            for category, group in items.dropna(subset=["item_category_id"]).groupby(
+                "item_category_id", sort=False
+            )
+        }
+        if category_policy != "none"
+        else {}
+    )
+
+    def retrieve_batch(batch: pd.DataFrame, k: int) -> pd.DataFrame:
+        if category_policy == "none":
+            return global_index.retrieve(batch, k=k)
+        candidates: list[pd.DataFrame] = []
+        for category, group in batch.groupby(
+            "search_category", sort=False, dropna=False
+        ):
+            category_key = (
+                None if category is None or str(category) == "nan" else str(category)
+            )
+            index = (
+                category_indexes.get(category_key) if category_key is not None else None
+            )
+            if index is None:
+                if category_policy == "hard":
+                    continue
+                index = global_index
+            result = index.retrieve(group, k=k)
+            if result.empty and category_policy == "fallback":
+                result = global_index.retrieve(group, k=k)
+            candidates.append(result)
+        if not candidates:
+            return pd.DataFrame(
+                columns=[
+                    "internal_query_id",
+                    "item_id",
+                    "source",
+                    "score",
+                    "rank",
+                ]
+            )
+        return pd.concat(candidates, ignore_index=True)
+
+    metrics = stream_recall_at_k(
+        queries,
+        ground_truth,
+        retrieve_batch,
+        ks=ks,
+        batch_size=batch_size,
+    )
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "PASS",
+        "method": "tfidf",
+        "split": (
+            "cold-item-validation-subset" if subset_queries else "cold-item-validation"
+        ),
+        "category_policy": category_policy,
+        "sublinear_tf": sublinear_tf,
+        "n_queries": ground_truth["internal_query_id"].nunique(),
+        "n_items": len(items),
+        "n_relevant": len(ground_truth),
+        "candidate_k": max(ks),
+        "batch_size": batch_size,
+        "metrics": metrics,
+        "config_hash": config.hash,
+        "reason": "TF-IDF baseline validation with step 50 recall@k",
     }
     target = Path(output)
     target.parent.mkdir(parents=True, exist_ok=True)

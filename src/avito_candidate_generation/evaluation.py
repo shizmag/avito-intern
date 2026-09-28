@@ -34,14 +34,13 @@ def recall_at_k(predictions: pd.DataFrame, ground_truth: pd.DataFrame, k: int) -
     ranked = predictions.sort_values(
         ["internal_query_id", "rank", "item_id"], kind="mergesort"
     ).drop_duplicates(["internal_query_id", "item_id"])  # pyright: ignore[reportCallIssue]
+    query_top: dict[str, list[str]] = {
+        str(q): list(items.head(k).astype(str))
+        for q, items in ranked.groupby("internal_query_id", sort=False)["item_id"]
+    }
     values: list[float] = []
     for query_id in query_ids:
-        got = set(
-            ranked.loc[ranked["internal_query_id"].astype(str) == query_id, "item_id"]
-            .head(k)
-            .astype(str)
-            .tolist()
-        )
+        got = set(query_top.get(query_id, []))
         values.append(len(got & relevant[query_id]) / len(relevant[query_id]))
     return sum(values) / len(values) if values else 0.0
 

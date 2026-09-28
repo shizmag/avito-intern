@@ -35,6 +35,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output", default="artifacts/metrics/real_validation.json"
     )
     real_validation.add_argument("--batch-size", type=int, default=256)
+    tfidf_val = commands.add_parser("tfidf-validation")
+    tfidf_val.add_argument("--config", default="configs/selected.toml")
+    tfidf_val.add_argument("--subset", type=int, default=1000)
+    tfidf_val.add_argument(
+        "--output", default="artifacts/metrics/tfidf_validation.json"
+    )
+    tfidf_val.add_argument("--batch-size", type=int, default=256)
+    tfidf_val.add_argument("--seed", type=int, default=42)
     rerank_val = commands.add_parser("rerank-validation")
     rerank_val.add_argument("--config", default="configs/selected.toml")
     rerank_val.add_argument("--subset", type=int, default=500)
@@ -67,6 +75,12 @@ def _build_parser() -> argparse.ArgumentParser:
     train = commands.add_parser("train")
     train.add_argument("--config", default="configs/selected.toml")
     train.add_argument("--artifact-root", type=Path)
+    train.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Resume pipeline from existing artifacts if present (default: True)",
+    )
     evaluate = commands.add_parser("evaluate")
     evaluate.add_argument(
         "--manifest", type=Path, default=Path("artifacts/selected/manifest.json")
@@ -102,6 +116,16 @@ def main() -> None:
         result = run_bm25_validation(
             args.config, output=args.output, batch_size=args.batch_size
         )
+    elif args.command == "tfidf-validation":
+        from avito_candidate_generation.validation import run_tfidf_validation
+
+        result = run_tfidf_validation(
+            args.config,
+            output=args.output,
+            subset_queries=args.subset,
+            batch_size=args.batch_size,
+            seed=args.seed,
+        )
     elif args.command == "rerank-validation":
         from avito_candidate_generation.rerank_experiment import (
             run_reranker_validation,
@@ -134,7 +158,9 @@ def main() -> None:
             result = {
                 "manifest": str(
                     workflow.train_selected(
-                        args.config, artifact_root=args.artifact_root
+                        args.config,
+                        artifact_root=args.artifact_root,
+                        resume=args.resume,
                     )
                 )
             }

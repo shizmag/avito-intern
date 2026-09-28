@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
@@ -30,6 +31,7 @@ from .retrievers.dense import (
     build_embedding_artifact_streaming,
     encode_texts,
     load_cached_embedding_artifact,
+    load_embedding_artifact,
     save_embedding_artifact,
 )
 from .retrievers.exact_search import exact_top_k
@@ -454,6 +456,15 @@ def _save_tower_embeddings(
 ) -> EmbeddingArtifact:
     directory.mkdir(parents=True, exist_ok=True)
     embedding_path = directory / "embeddings.npy"
+    item_ids_path = directory / "item_ids.json"
+    metadata_path = directory / "metadata.json"
+    if embedding_path.is_file() and item_ids_path.is_file() and metadata_path.is_file():
+        try:
+            cached = load_embedding_artifact(directory)
+            if len(cached.item_ids) == len(items):
+                return cached
+        except ValueError:
+            pass
     embeddings = model.encode_items_streaming(
         items["text"].tolist(), embedding_path, batch_size=batch_size
     )
@@ -576,7 +587,7 @@ def prepare_selector_features(
         features[present] = features[present].fillna(False).astype("int8")
         features[rank] = features[rank].fillna(missing_rank).astype("int32")
         score_values = cast(list[float], features[score].dropna().tolist())
-        floor = min(score_values) - 1.0
+        floor = min(score_values) - 1.0 if score_values else -1.0
         features[score] = features[score].fillna(floor).astype("float32")
     features["retriever_count"] = features["retriever_count"].astype("int8")
     return features
@@ -608,6 +619,68 @@ def rank_with_selector(
     ).reset_index(drop=True)
 
 
+def _union_chunked(
+    sources: list[pd.DataFrame], chunk_size: int = 5000
+) -> pd.DataFrame:
+    all_query_ids = list(
+        dict.fromkeys(sources[0]["internal_query_id"].astype(str).tolist())
+    )
+    if len(all_query_ids) <= chunk_size:
+        return _union(sources)
+
+    parts: list[pd.DataFrame] = []
+    for start in range(0, len(all_query_ids), chunk_size):
+        chunk_qids = set(all_query_ids[start : start + chunk_size])
+        chunk_sources = [
+            src[src["internal_query_id"].astype(str).isin(chunk_qids)]
+            for src in sources
+        ]
+        parts.append(_union(chunk_sources))
+        del chunk_sources
+        gc.collect()
+    return pd.concat(parts, ignore_index=True)
+
+
+def rank_with_selector_chunked(
+    candidates: pd.DataFrame,
+    model: dict[str, object],
+    *,
+    limit: int,
+    missing_rank: int,
+    source_names: tuple[str, ...] = ("bm25", "dense", "two_tower"),
+    chunk_size: int = 5000,
+) -> pd.DataFrame:
+    all_query_ids = list(
+        dict.fromkeys(candidates["internal_query_id"].astype(str).tolist())
+    )
+    if len(all_query_ids) <= chunk_size:
+        return rank_with_selector(
+            candidates,
+            model,
+            limit=limit,
+            missing_rank=missing_rank,
+            source_names=source_names,
+        )
+    parts: list[pd.DataFrame] = []
+    for start in range(0, len(all_query_ids), chunk_size):
+        chunk_qids = set(all_query_ids[start : start + chunk_size])
+        chunk_cand = candidates[
+            candidates["internal_query_id"].astype(str).isin(chunk_qids)
+        ].copy()
+        parts.append(
+            rank_with_selector(
+                chunk_cand,
+                model,
+                limit=limit,
+                missing_rank=missing_rank,
+                source_names=source_names,
+            )
+        )
+        del chunk_cand
+        gc.collect()
+    return pd.concat(parts, ignore_index=True)
+
+
 def _component(root: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else root / path
@@ -618,12 +691,14 @@ def train_selected(
     *,
     artifact_root: str | Path | None = None,
     encoder: TextEncoder | None = None,
+    resume: bool = True,
 ) -> Path:
     config = load_config(config_path)
     data = _load_workflow_data(config)
     selection = config.values.get("selection", {})
     dense_config = config.values.get("dense", {})
     tower_config = config.values.get("two_tower", {})
+    catboost_config = config.values.get("catboost", {})
     configured_root = config.values.get("artifacts", {}).get(
         "root", "artifacts/selected"
     )
@@ -673,39 +748,62 @@ def train_selected(
     print(f"Artifact root: {root}", flush=True)
     print("=" * 70, flush=True)
 
+    # [1/8] BM25 Index
     lexical_dir = root / "lexical"
     lexical_dir.mkdir(parents=True, exist_ok=True)
-    print(
-        f"\n[1/8] Fitting BM25 index on {len(data.train_items):,} train items...",
-        flush=True,
-    )
-    t0 = time.time()
-    BM25Index.fit(data.train_items).save(lexical_dir / "bm25.npz")
-    print(
-        f"  ✓ BM25 index saved to {lexical_dir / 'bm25.npz'} [{time.time() - t0:.1f}s]",
-        flush=True,
-    )
+    bm25_path = lexical_dir / "bm25.npz"
+    if resume and bm25_path.exists() and (bm25_path / "metadata.json").is_file():
+        print(
+            f"\n[1/8] Reusing existing BM25 index from {bm25_path}",
+            flush=True,
+        )
+    else:
+        print(
+            f"\n[1/8] Fitting BM25 index on {len(data.train_items):,} train items...",
+            flush=True,
+        )
+        t0 = time.time()
+        BM25Index.fit(data.train_items).save(bm25_path)
+        print(
+            f"  ✓ BM25 index saved to {bm25_path} [{time.time() - t0:.1f}s]",
+            flush=True,
+        )
+
     try:
         encoder_batch_size = int(dense_config.get("batch_size", 32))
         tower_batch_size = int(tower_config.get("encode_batch_size", 256))
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid encoder batch-size configuration") from exc
     model_revision = str(dense_config.get("revision", "unknown"))
-    print(
-        f"\n[2/8] Encoding {len(data.train_items):,} train items with Dense E5...",
-        flush=True,
-    )
-    t0 = time.time()
-    _ = _save_embeddings(
-        encoder,
-        data.train_items,
-        root / "embeddings/generic/train",
-        model_name,
-        revision=model_revision,
-        batch_size=encoder_batch_size,
-        text_prefix=dense_item_prefix,
-    )
-    print(f"  ✓ Train items encoded [{time.time() - t0:.1f}s]", flush=True)
+
+    # [2/8] Dense E5 train items
+    train_dense_dir = root / "embeddings/generic/train"
+    if (
+        resume
+        and (train_dense_dir / "embeddings.npy").is_file()
+        and (train_dense_dir / "item_ids.json").is_file()
+    ):
+        print(
+            f"\n[2/8] Reusing existing train item embeddings from {train_dense_dir}",
+            flush=True,
+        )
+    else:
+        print(
+            f"\n[2/8] Encoding {len(data.train_items):,} train items with Dense E5...",
+            flush=True,
+        )
+        t0 = time.time()
+        _ = _save_embeddings(
+            encoder,
+            data.train_items,
+            train_dense_dir,
+            model_name,
+            revision=model_revision,
+            batch_size=encoder_batch_size,
+            text_prefix=dense_item_prefix,
+        )
+        print(f"  ✓ Train items encoded [{time.time() - t0:.1f}s]", flush=True)
+
     try:
         tower_config_obj = TrainingConfig(
             seed=config.seed,
@@ -719,108 +817,127 @@ def train_selected(
         tower_vocab_size = int(tower_config.get("vocab_size", 65537))
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid two-tower configuration") from exc
-    print(
-        f"\n[3/8] Training Two-Tower v1 on {len(data.train_pairs):,} interaction pairs...",
-        flush=True,
-    )
-    t0 = time.time()
-    tower_v1 = TwoTowerModel(
-        tower_dimension, seed=config.seed, vocab_size=tower_vocab_size
-    )
-    losses_v1 = train_two_tower(
-        tower_v1,
-        data.train_pairs["query_text"].astype(str).tolist(),
-        data.train_pairs["item_text"].astype(str).tolist(),
-        config=tower_config_obj,
-    )
-    v1_path = root / "two_tower/v1/checkpoint.json"
-    tower_v1.save(v1_path)
-    _ = _save_tower_embeddings(
-        tower_v1,
-        data.train_items,
-        root / "embeddings/two_tower/v1/train",
-        "v1",
-        batch_size=tower_batch_size,
-    )
-    print(f"  ✓ Two-Tower v1 checkpoint saved [{time.time() - t0:.1f}s]", flush=True)
 
-    print(
-        f"\n[4/8] Encoding {len(data.validation_items):,} validation items...",
-        flush=True,
-    )
-    t0 = time.time()
-    generic_validation = _save_embeddings(
-        encoder,
-        data.validation_items,
-        root / "embeddings/generic/validation",
-        model_name,
-        revision=model_revision,
-        batch_size=encoder_batch_size,
-        text_prefix=dense_item_prefix,
-    )
+    # [3/8] Two-Tower v1
+    v1_path = root / "two_tower/v1/checkpoint.json"
+    tt_train_dir = root / "embeddings/two_tower/v1/train"
+    losses_v1: list[float] = []
+    if (
+        resume
+        and v1_path.is_file()
+        and (tt_train_dir / "embeddings.npy").is_file()
+    ):
+        print(
+            f"\n[3/8] Reusing existing Two-Tower v1 checkpoint from {v1_path}",
+            flush=True,
+        )
+        tower_v1 = TwoTowerModel.load(v1_path)
+    else:
+        print(
+            f"\n[3/8] Training Two-Tower v1 on {len(data.train_pairs):,} interaction pairs...",
+            flush=True,
+        )
+        t0 = time.time()
+        tower_v1 = TwoTowerModel(
+            tower_dimension, seed=config.seed, vocab_size=tower_vocab_size
+        )
+        losses_v1 = train_two_tower(
+            tower_v1,
+            data.train_pairs["query_text"].astype(str).tolist(),
+            data.train_pairs["item_text"].astype(str).tolist(),
+            config=tower_config_obj,
+        )
+        tower_v1.save(v1_path)
+        _ = _save_tower_embeddings(
+            tower_v1,
+            data.train_items,
+            tt_train_dir,
+            "v1",
+            batch_size=tower_batch_size,
+        )
+        print(f"  ✓ Two-Tower v1 checkpoint saved [{time.time() - t0:.1f}s]", flush=True)
+
+    # [4/8] Validation items
+    val_dense_dir = root / "embeddings/generic/validation"
+    val_tt_dir = root / "embeddings/two_tower/v1/validation"
     selected_tower = tower_v1
-    catboost_config = config.values.get("catboost", {})
     try:
         catboost_iterations = int(catboost_config.get("iterations", 250))
         catboost_depth = int(catboost_config.get("depth", 7))
         catboost_learning_rate = float(catboost_config.get("learning_rate", 0.08))
     except (TypeError, ValueError) as exc:
         raise ValueError("invalid CatBoost configuration") from exc
-    tower_v1_validation = _save_tower_embeddings(
-        selected_tower,
-        data.validation_items,
-        root / "embeddings/two_tower/v1/validation",
-        "v1",
-        batch_size=tower_batch_size,
-    )
-    print(f"  ✓ Validation items encoded [{time.time() - t0:.1f}s]", flush=True)
-    print(
-        f"\n[5/8] Retrieving validation candidates for {len(data.validation_queries):,} queries (k={k})...",
-        flush=True,
-    )
-    t0 = time.time()
-    validation_sources = _retrieve_sources(
-        data.validation_queries,
-        data.validation_items,
-        encoder,
-        generic_validation,
-        selected_tower,
-        tower_v1_validation,
-        k,
-        encoder_batch_size=encoder_batch_size,
-        category_policy=str(selection.get("category_policy", "none")),
-        dense_query_prefix=dense_query_prefix,
-    )
-    print(f"  ✓ Validation candidates retrieved [{time.time() - t0:.1f}s]", flush=True)
+
+    if (
+        resume
+        and (val_dense_dir / "embeddings.npy").is_file()
+        and (val_tt_dir / "embeddings.npy").is_file()
+    ):
+        print(
+            f"\n[4/8] Reusing existing validation item embeddings",
+            flush=True,
+        )
+        generic_validation = load_embedding_artifact(val_dense_dir)
+        tower_v1_validation = load_embedding_artifact(val_tt_dir)
+    else:
+        print(
+            f"\n[4/8] Encoding {len(data.validation_items):,} validation items...",
+            flush=True,
+        )
+        t0 = time.time()
+        generic_validation = _save_embeddings(
+            encoder,
+            data.validation_items,
+            val_dense_dir,
+            model_name,
+            revision=model_revision,
+            batch_size=encoder_batch_size,
+            text_prefix=dense_item_prefix,
+        )
+        tower_v1_validation = _save_tower_embeddings(
+            selected_tower,
+            data.validation_items,
+            val_tt_dir,
+            "v1",
+            batch_size=tower_batch_size,
+        )
+        print(f"  ✓ Validation items encoded [{time.time() - t0:.1f}s]", flush=True)
+
+    # [5/8] Validation candidates
     candidate_dir = root / "candidates"
     candidate_dir.mkdir(parents=True, exist_ok=True)
-    for name, frame in zip(
-        ("bm25", "dense", "two_tower"), validation_sources, strict=True
-    ):
-        frame.to_parquet(candidate_dir / f"{name}.parquet", index=False)
-    union = _union(validation_sources)
-    validation_candidates = cast(
-        pd.DataFrame, pd.concat(validation_sources, ignore_index=True)
-    )
-    selector_features = prepare_selector_features(
-        validation_candidates,
-        missing_rank=k + 1,
-    )
-    validation_pairs = set(
-        zip(
-            data.validation_ground_truth["internal_query_id"].astype(str),
-            data.validation_ground_truth["item_id"].astype(str),
-            strict=True,
+    candidate_files = [candidate_dir / f"{name}.parquet" for name in ("bm25", "dense", "two_tower")]
+    if resume and all(f.is_file() for f in candidate_files):
+        print(
+            f"\n[5/8] Reusing existing validation candidates from {candidate_dir}",
+            flush=True,
         )
-    )
-    selector_features["label"] = [
-        (str(query_id), str(item_id)) in validation_pairs
-        for query_id, item_id in zip(
-            selector_features["internal_query_id"],
-            selector_features["item_id"],
-            strict=True,
+        validation_sources = [pd.read_parquet(f) for f in candidate_files]
+    else:
+        print(
+            f"\n[5/8] Retrieving validation candidates for {len(data.validation_queries):,} queries (k={k})...",
+            flush=True,
         )
-    ]
+        t0 = time.time()
+        validation_sources = _retrieve_sources(
+            data.validation_queries,
+            data.validation_items,
+            encoder,
+            generic_validation,
+            selected_tower,
+            tower_v1_validation,
+            k,
+            encoder_batch_size=encoder_batch_size,
+            category_policy=str(selection.get("category_policy", "none")),
+            dense_query_prefix=dense_query_prefix,
+        )
+        print(f"  ✓ Validation candidates retrieved [{time.time() - t0:.1f}s]", flush=True)
+        for name, frame in zip(
+            ("bm25", "dense", "two_tower"), validation_sources, strict=True
+        ):
+            frame.to_parquet(candidate_dir / f"{name}.parquet", index=False)
+
+    # [6/8] Training CatBoost selector
     tuning_query_ids: set[str] = set()
     for query_id in data.validation_queries["internal_query_id"].astype(str):
         try:
@@ -834,14 +951,56 @@ def train_selected(
             raise ValueError("invalid validation query ID") from exc
         if bucket == 0:
             tuning_query_ids.add(query_id)
-    tuning_mask = (
-        selector_features["internal_query_id"].astype(str).isin(list(tuning_query_ids))
+
+    validation_pairs = set(
+        zip(
+            data.validation_ground_truth["internal_query_id"].astype(str),
+            data.validation_ground_truth["item_id"].astype(str),
+            strict=True,
+        )
     )
-    tuning_features = cast(pd.DataFrame, selector_features.loc[tuning_mask].copy())
-    tuning_labels = set(tuning_features["label"].tolist())
-    if len(tuning_features.index) == 0 or len(tuning_labels) < 2:
-        tuning_features = selector_features
+
+    if tuning_query_ids:
+        tuning_sources = [
+            src[src["internal_query_id"].astype(str).isin(tuning_query_ids)].copy()
+            for src in validation_sources
+        ]
+        tuning_candidates = pd.concat(tuning_sources, ignore_index=True)
+        del tuning_sources
+        gc.collect()
+
+        tuning_features = prepare_selector_features(
+            tuning_candidates,
+            missing_rank=k + 1,
+        )
+        del tuning_candidates
+        gc.collect()
+
+        tuning_features["label"] = [
+            (str(query_id), str(item_id)) in validation_pairs
+            for query_id, item_id in zip(
+                tuning_features["internal_query_id"],
+                tuning_features["item_id"],
+                strict=True,
+            )
+        ]
+        tuning_labels = set(tuning_features["label"].tolist())
+    else:
+        tuning_labels = set()
+
+    if not tuning_query_ids or len(tuning_features.index) == 0 or len(tuning_labels) < 2:
+        all_val_candidates = pd.concat(validation_sources, ignore_index=True)
+        tuning_features = prepare_selector_features(all_val_candidates, missing_rank=k + 1)
+        tuning_features["label"] = [
+            (str(query_id), str(item_id)) in validation_pairs
+            for query_id, item_id in zip(
+                tuning_features["internal_query_id"],
+                tuning_features["item_id"],
+                strict=True,
+            )
+        ]
         tuning_query_ids = set()
+
     print(
         f"\n[6/8] Training CatBoost selector on {len(tuning_features):,} candidate pairs...",
         flush=True,
@@ -855,22 +1014,30 @@ def train_selected(
         random_seed=config.seed,
     )
     selector_path = save_selector(selector, root / "fusion/catboost_selector.json")
-    heldout_candidates = cast(
-        pd.DataFrame,
-        validation_candidates.loc[
-            ~validation_candidates["internal_query_id"]
-            .astype(str)
-            .isin(list(tuning_query_ids))
-        ].copy(),
-    )
-    catboost_ranked = rank_with_selector(
+    del tuning_features
+    gc.collect()
+
+    heldout_sources = [
+        src[~src["internal_query_id"].astype(str).isin(tuning_query_ids)].copy()
+        for src in validation_sources
+    ]
+    heldout_candidates = pd.concat(heldout_sources, ignore_index=True)
+    del heldout_sources
+    gc.collect()
+
+    catboost_ranked = rank_with_selector_chunked(
         heldout_candidates,
         selector,
         limit=50,
         missing_rank=k + 1,
     )
+    del heldout_candidates
+    gc.collect()
+
+    union = _union_chunked(validation_sources)
     union.to_parquet(candidate_dir / "union.parquet", index=False)
     catboost_ranked.to_parquet(candidate_dir / "catboost.parquet", index=False)
+
     metric_payload: dict[str, Any] = {
         "schema_version": 1,
         "losses": {"v1": losses_v1},
@@ -905,19 +1072,12 @@ def train_selected(
         split="validation-heldout",
     )["metrics"]
     metrics_path = _write_json(root / "metrics/validation.json", metric_payload)
-    selector = train_selector(
-        selector_features,
-        iterations=catboost_iterations,
-        depth=catboost_depth,
-        learning_rate=catboost_learning_rate,
-        random_seed=config.seed,
-    )
-    selector_path = save_selector(selector, root / "fusion/catboost_selector.json")
     print(
         f"  ✓ CatBoost selector trained and validation metrics written [{time.time() - t0:.1f}s]",
         flush=True,
     )
 
+    # [7/8] Benchmark items
     print(
         f"\n[7/8] Encoding {len(data.benchmark_items):,} benchmark items...",
         flush=True,
@@ -941,6 +1101,7 @@ def train_selected(
     )
     print(f"  ✓ Benchmark items encoded [{time.time() - t0:.1f}s]", flush=True)
 
+    # [8/8] Benchmark predictions
     print(
         f"\n[8/8] Generating benchmark candidates and predictions for {len(data.benchmark_queries):,} queries...",
         flush=True,
@@ -958,7 +1119,7 @@ def train_selected(
         category_policy=str(selection.get("category_policy", "none")),
         dense_query_prefix=dense_query_prefix,
     )
-    benchmark_catboost = rank_with_selector(
+    benchmark_catboost = rank_with_selector_chunked(
         cast(pd.DataFrame, pd.concat(benchmark_sources, ignore_index=True)),
         selector,
         limit=50,

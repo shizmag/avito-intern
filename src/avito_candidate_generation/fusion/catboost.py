@@ -33,6 +33,7 @@ def train_selector(
     depth: int = 6,
     learning_rate: float = 0.05,
     random_seed: int = 42,
+    thread_count: int | None = None,
 ) -> SelectorModel:
     """Fit CatBoostClassifier on a fixed numeric OOF feature schema."""
     if label_column not in features:
@@ -49,6 +50,13 @@ def train_selector(
         from catboost import CatBoostClassifier  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("CatBoost fusion requires catboost dependency") from exc
+    import os
+
+    threads = (
+        thread_count
+        if thread_count is not None
+        else min(os.cpu_count() or 4, 8)
+    )
     model = CatBoostClassifier(
         iterations=iterations,
         depth=depth,
@@ -57,7 +65,7 @@ def train_selector(
         random_seed=random_seed,
         verbose=False,
         allow_writing_files=False,
-        thread_count=1,
+        thread_count=threads,
     )
     model.fit(features[columns], labels)
     return SelectorModel(
